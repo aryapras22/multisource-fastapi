@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+pymongo
+spacy
+plantuml
+newscatcherapi
+app-store-scraper
+google-play-scraper
+emoji
+langdetect
+requests
+python-dotenv
