@@ -56,3 +56,49 @@ class ReviewModel(BaseModel):
         # This is needed to allow the custom PyObjectId type
         arbitrary_types_allowed=True,
     )
+
+
+class NewsModel(BaseModel):
+    # Map the 'id' field to MongoDB's '_id' and handle conversion
+    id: PyObjectId = Field(alias="_id")
+
+    title: str
+    author: Optional[str] = None
+    link: Optional[HttpUrl] = None
+    description: Optional[str] = None
+    content: Optional[str] = None
+    query: str
+    session_id: str
+
+    model_config = ConfigDict(
+        # This allows Pydantic to populate the model using the field alias '_id'
+        populate_by_name=True,
+        # This is needed to allow the custom PyObjectId type
+        arbitrary_types_allowed=True,
+    )
+
+
+class TwitterModel(BaseModel):
+    # Map the 'id' field to MongoDB's '_id' and handle conversion
+    id: PyObjectId = Field(alias="_id")
+
+    tweet_id: str
+    url: Optional[str] = None
+    text: str
+    retweet_count: int = 0
+    reply_count: int = 0
+    like_count: int = 0
+    quote_count: int = 0
+    created_at: Optional[str] = None
+    lang: Optional[str] = None
+    author: dict
+    entities: dict = {}
+    query: str
+    session_id: str
+
+    model_config = ConfigDict(
+        # This allows Pydantic to populate the model using the field alias '_id'
+        populate_by_name=True,
+        # This is needed to allow the custom PyObjectId type
+        arbitrary_types_allowed=True,
+    )

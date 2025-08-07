@@ -1,7 +1,14 @@
 from fastapi import FastAPI, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
 from config import settings
-from models import AppModel, CaseStudyRequest, UpdateQueriesRequest, ReviewModel
+from models import (
+    AppModel,
+    CaseStudyRequest,
+    NewsModel,
+    UpdateQueriesRequest,
+    ReviewModel,
+    TwitterModel,
+)
 from services.get_queries import generate_queries_from_case_study
 from services.app_scrapper import (
     get_google_play_apps,
@@ -9,10 +16,19 @@ from services.app_scrapper import (
     get_google_play_reviews,
     get_appstore_reviews,
 )
+from services.news_scrapper import scrap_news
 import asyncio
 import uuid
-from db import case_study_collection, apps_collection, reviews_collection
+from db import (
+    case_study_collection,
+    apps_collection,
+    reviews_collection,
+    news_collection,
+    tweets_collection,  # Add this import
+)
 from pymongo.errors import DuplicateKeyError
+
+from services.twitter_x_scrapper import scrap_twitter_x
 
 
 app = FastAPI()
@@ -33,6 +49,7 @@ def read_root():
     return {"Hello": "World"}
 
 
+@app.get("/get-projects")
 @app.post("/get-queries")
 async def get_queries(request: CaseStudyRequest) -> dict:
     session_id = str(uuid.uuid4())
@@ -144,5 +161,92 @@ async def get_reviews(
     return reviews
 
 
-# @app.get("/get-news")
-# async def get_news():
+@app.get("/get-news", response_model=list[NewsModel])
+async def get_news(session_id: str, query: str, count: int = 10) -> list[NewsModel]:
+    """
+    Get news articles for a specific query and save them to the database.
+    """
+    # Check if articles for this query and session already exist
+    existing_articles = list(
+        news_collection.find({"query": query, "session_id": session_id})
+    )
+    if existing_articles:
+        return existing_articles
+
+    news = await asyncio.to_thread(scrap_news, query, count=count)
+    articles = news.get("articles", [])  # type: ignore
+
+    if not articles:
+        return []
+
+    processed_articles = []
+    for article in articles:
+        processed_article = {
+            "title": article.get("title", ""),
+            "author": article.get("author"),
+            "link": article.get("link"),
+            "description": article.get("description"),
+            "content": article.get("content"),
+            "query": query,
+            "session_id": session_id,
+        }
+        processed_articles.append(processed_article)
+
+    # Insert articles into database and get the inserted documents with _id
+    result = news_collection.insert_many(processed_articles)
+
+    # Retrieve the inserted documents with their MongoDB _id fields
+    inserted_articles = list(
+        news_collection.find({"_id": {"$in": result.inserted_ids}})
+    )
+
+    return inserted_articles
+
+
+@app.get("/get-tweets", response_model=list[TwitterModel])
+async def get_tweets(
+    session_id: str, query: str, count: int = 10
+) -> list[TwitterModel]:
+    """
+    Get tweets for a specific query and save them to the database.
+    """
+    # Check if tweets for this query and session already exist
+    existing_tweets = list(
+        tweets_collection.find({"query": query, "session_id": session_id})
+    )
+    if existing_tweets:
+        return existing_tweets
+
+    tweets = await asyncio.to_thread(scrap_twitter_x, query, count=count)
+
+    if not tweets:
+        return []
+
+    processed_tweets = []
+    for tweet in tweets:
+        processed_tweet = {
+            "tweet_id": tweet.get("id", ""),
+            "url": tweet.get("url"),
+            "text": tweet.get("text", ""),
+            "retweet_count": tweet.get("retweet_count", 0),
+            "reply_count": tweet.get("reply_count", 0),
+            "like_count": tweet.get("like_count", 0),
+            "quote_count": tweet.get("quote_count", 0),
+            "created_at": tweet.get("created_at"),
+            "lang": tweet.get("lang"),
+            "author": tweet.get("author", {}),
+            "entities": tweet.get("entities", {}),
+            "query": query,
+            "session_id": session_id,
+        }
+        processed_tweets.append(processed_tweet)
+
+    # Insert tweets into database and get the inserted documents with _id
+    result = tweets_collection.insert_many(processed_tweets)
+
+    # Retrieve the inserted documents with their MongoDB _id fields
+    inserted_tweets = list(
+        tweets_collection.find({"_id": {"$in": result.inserted_ids}})
+    )
+
+    return inserted_tweets
