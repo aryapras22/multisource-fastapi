@@ -6,7 +6,7 @@ import os
 class Settings(BaseSettings):
 
     frontend_origin: str = Field(
-        alias="FRONTEND_ORIGIN", default="http://localhost:3000"
+        alias="FRONTEND_ORIGIN", default="http://localhost:5173"
     )
     queries_generator_webhook: str = Field(
         alias="QUERIES_GENERATOR_WEBHOOK", default="NONE"

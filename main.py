@@ -1,4 +1,5 @@
-from fastapi import FastAPI, HTTPException, Body
+import datetime
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from config import settings
 from models import (
@@ -8,6 +9,10 @@ from models import (
     UpdateQueriesRequest,
     ReviewModel,
     TwitterModel,
+    ProjectModel,
+    CreateProjectRequest,
+    ProjectDataSources,
+    UpdateProjectConfigRequest,
 )
 from services.get_queries import generate_queries_from_case_study
 from services.app_scrapper import (
@@ -20,20 +25,21 @@ from services.news_scrapper import scrap_news
 import asyncio
 import uuid
 from db import (
-    case_study_collection,
+    project_collection,
     apps_collection,
     reviews_collection,
     news_collection,
     tweets_collection,  # Add this import
 )
 from pymongo.errors import DuplicateKeyError
+from pymongo import ReturnDocument
 
 from services.twitter_x_scrapper import scrap_twitter_x
 
 
 app = FastAPI()
 
-origins = [settings.frontend_origin]
+origins = [settings.frontend_origin, "http://127.0.0.1:5173"]
 
 app.add_middleware(
     CORSMiddleware,
@@ -49,40 +55,84 @@ def read_root():
     return {"Hello": "World"}
 
 
-@app.get("/get-projects")
-@app.post("/get-queries")
-async def get_queries(request: CaseStudyRequest) -> dict:
+@app.get("/get-projects", response_model=list[ProjectModel])
+async def get_projects():
+    projects_cursor = project_collection.find({})
+    projects_list = list(projects_cursor)
+
+    for project in projects_list:
+        if isinstance(project.get("created_at"), datetime.datetime):
+            project["created_at"] = project["created_at"]
+        # Backfill defaults
+        project.setdefault("status", "draft")
+        project.setdefault("queries", [])
+        project.setdefault("dataSources", ProjectDataSources().model_dump())
+
+    return projects_list
+
+
+@app.get("/get-project-data", response_model=ProjectModel)
+async def get_project_data(id: str):
+    doc = project_collection.find_one({"_id": id})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Project not found")
+    # Backfill defaults for older records
+    doc.setdefault("queries", [])
+    doc.setdefault("dataSources", ProjectDataSources().model_dump())
+    doc.setdefault("status", "draft")
+    return doc
+
+
+@app.post("/create-new-project")
+async def create_project(request: CreateProjectRequest) -> dict:
     session_id = str(uuid.uuid4())
     queries = await generate_queries_from_case_study(case_study=request.case_study)
 
     case_study_data = {
         "_id": session_id,
+        "name": request.name,
         "case_study": request.case_study,
+        "description": request.description,
         "queries": queries,
+        "created_at": datetime.datetime.now(),
+        "status": "draft",
+        "dataSources": (request.dataSources or ProjectDataSources()).model_dump(),
     }
-    case_study_collection.insert_one(case_study_data)
+    project_collection.insert_one(case_study_data)
+    return {
+        "session_id": session_id,
+        "queries": queries,
+        "dataSources": case_study_data["dataSources"],
+    }
 
-    return {"session_id": session_id, "queries": queries}
 
+@app.patch("/update-project-config", response_model=ProjectModel)
+async def update_project_config(payload: UpdateProjectConfigRequest):
+    update: dict = {}
+    if payload.queries is not None:
+        update["queries"] = payload.queries
+    if payload.dataSources is not None:
+        update["dataSources"] = payload.dataSources.model_dump()
+    if payload.description is not None:
+        update["description"] = payload.description
+    if not update:
+        raise HTTPException(status_code=400, detail="No fields provided to update")
+    # Any config change moves project to configured
+    update["status"] = "configured"
 
-@app.post("/update-queries")
-async def update_queries(request: UpdateQueriesRequest) -> dict:
-    """
-    Update the queries for a specific session after user selection.
-
-    This allows users to select which queries they want to use before
-    fetching apps with the /get-apps endpoint.
-    """
-    case_study_data = case_study_collection.find_one({"_id": request.session_id})
-    if not case_study_data:
-        raise HTTPException(status_code=404, detail="Session ID not found")
-
-    # Update the queries in the database with only the selected ones
-    case_study_collection.update_one(
-        {"_id": request.session_id}, {"$set": {"queries": request.queries}}
+    doc = project_collection.find_one_and_update(
+        {"_id": payload.id},
+        {"$set": update},
+        return_document=ReturnDocument.AFTER,
     )
+    if not doc:
+        raise HTTPException(status_code=404, detail="Project not found")
 
-    return {"session_id": request.session_id, "updated_queries": request.queries}
+    # Backfill (in case older doc lacked these)
+    doc.setdefault("queries", [])
+    doc.setdefault("dataSources", ProjectDataSources().model_dump())
+    doc.setdefault("status", "draft")  # will be overridden by updated status above
+    return doc
 
 
 @app.get("/get-apps", response_model=list[AppModel])
@@ -90,7 +140,7 @@ async def get_apps(session_id: str, limit: int = 10) -> list:
     """
     Get apps from Google Play and Apple App Store concurrently based on a session_id.
     """
-    case_study_data = case_study_collection.find_one({"_id": session_id})
+    case_study_data = project_collection.find_one({"_id": session_id})
     if not case_study_data:
         raise HTTPException(status_code=404, detail="Session ID not found")
 

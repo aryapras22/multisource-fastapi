@@ -1,6 +1,7 @@
 from __future__ import annotations
 from pydantic import BaseModel, Field, HttpUrl, ConfigDict
-from typing import Optional
+from typing import Literal, Optional
+from datetime import datetime
 from typing_extensions import Annotated
 from pydantic.functional_validators import BeforeValidator
 
@@ -9,12 +10,49 @@ PyObjectId = Annotated[str, BeforeValidator(str)]
 
 
 class CaseStudyRequest(BaseModel):
+    name: str
     case_study: str
 
 
 class UpdateQueriesRequest(BaseModel):
     session_id: str
     queries: list[str]
+
+
+class ProjectDataSources(BaseModel):
+    appStores: bool = True
+    news: bool = True
+    socialMedia: bool = True
+
+
+class ProjectModel(BaseModel):
+    id: PyObjectId = Field(alias="_id")
+    name: str
+    case_study: str
+    description: Optional[str] = None
+    created_at: datetime
+    status: Literal["draft", "configured", "analyzing", "complete"] = "draft"
+    queries: Optional[list[str]] = None
+    dataSources: ProjectDataSources = Field(default_factory=ProjectDataSources)
+
+    model_config = ConfigDict(
+        populate_by_name=True,
+        arbitrary_types_allowed=True,
+    )
+
+
+class CreateProjectRequest(BaseModel):
+    name: str
+    case_study: str
+    description: Optional[str] = None
+    dataSources: Optional[ProjectDataSources] = None
+
+
+class UpdateProjectConfigRequest(BaseModel):
+    id: str
+    queries: Optional[list[str]] = None
+    dataSources: Optional[ProjectDataSources] = None
+    description: Optional[str] = None
 
 
 class AppModel(BaseModel):
