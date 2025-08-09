@@ -5,7 +5,6 @@ from datetime import datetime
 from typing_extensions import Annotated
 from pydantic.functional_validators import BeforeValidator
 
-
 PyObjectId = Annotated[str, BeforeValidator(str)]
 
 
@@ -15,8 +14,16 @@ class CaseStudyRequest(BaseModel):
 
 
 class UpdateQueriesRequest(BaseModel):
-    session_id: str
+    # renamed
+    project_id: str
     queries: list[str]
+
+
+class ProjectFetchState(BaseModel):
+    appStores: bool = False
+    news: bool = False
+    socialMedia: bool = False
+    reviews: bool = False
 
 
 class ProjectDataSources(BaseModel):
@@ -34,6 +41,7 @@ class ProjectModel(BaseModel):
     status: Literal["draft", "configured", "analyzing", "complete"] = "draft"
     queries: Optional[list[str]] = None
     dataSources: ProjectDataSources = Field(default_factory=ProjectDataSources)
+    fetchState: ProjectFetchState = Field(default_factory=ProjectFetchState)
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -56,9 +64,7 @@ class UpdateProjectConfigRequest(BaseModel):
 
 
 class AppModel(BaseModel):
-    # Map the 'id' field to MongoDB's '_id' and handle conversion
     id: PyObjectId = Field(alias="_id")
-
     appName: str
     appId: str | int
     developer: str
@@ -67,59 +73,47 @@ class AppModel(BaseModel):
     icon: HttpUrl
     url: Optional[str] = None
     store: str
-    session_id: str
+    project_id: str  # renamed
 
     model_config = ConfigDict(
-        # This allows Pydantic to populate the model using the field alias '_id'
         populate_by_name=True,
-        # This is needed to allow the custom PyObjectId type
         arbitrary_types_allowed=True,
     )
 
 
 class ReviewModel(BaseModel):
-    # Map the 'id' field to MongoDB's '_id' and handle conversion
     id: PyObjectId = Field(alias="_id")
-
     reviewer: str
     rating: int | float
     review: str
     app_id: str | int
     store: str
-    session_id: str
+    project_id: str  # renamed
 
     model_config = ConfigDict(
-        # This allows Pydantic to populate the model using the field alias '_id'
         populate_by_name=True,
-        # This is needed to allow the custom PyObjectId type
         arbitrary_types_allowed=True,
     )
 
 
 class NewsModel(BaseModel):
-    # Map the 'id' field to MongoDB's '_id' and handle conversion
     id: PyObjectId = Field(alias="_id")
-
     title: str
     author: Optional[str] = None
     link: Optional[HttpUrl] = None
     description: Optional[str] = None
     content: Optional[str] = None
     query: str
-    session_id: str
+    project_id: str  # renamed
 
     model_config = ConfigDict(
-        # This allows Pydantic to populate the model using the field alias '_id'
         populate_by_name=True,
-        # This is needed to allow the custom PyObjectId type
         arbitrary_types_allowed=True,
     )
 
 
 class TwitterModel(BaseModel):
-    # Map the 'id' field to MongoDB's '_id' and handle conversion
     id: PyObjectId = Field(alias="_id")
-
     tweet_id: str
     url: Optional[str] = None
     text: str
@@ -132,11 +126,9 @@ class TwitterModel(BaseModel):
     author: dict
     entities: dict = {}
     query: str
-    session_id: str
+    project_id: str  # renamed
 
     model_config = ConfigDict(
-        # This allows Pydantic to populate the model using the field alias '_id'
         populate_by_name=True,
-        # This is needed to allow the custom PyObjectId type
         arbitrary_types_allowed=True,
     )
