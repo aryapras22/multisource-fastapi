@@ -32,7 +32,10 @@ from db import (
 )
 from pymongo.errors import DuplicateKeyError
 from pymongo import ReturnDocument
+from services.preprocessing import clean_news_content, clean_review, clean_tweet_text
 from services.twitter_x_scrapper import scrap_twitter_x
+from bson.objectid import ObjectId
+
 
 app = FastAPI()
 
@@ -335,3 +338,30 @@ async def get_tweets(
         tweets_collection.find({"_id": {"$in": result.inserted_ids}})
     )
     return inserted_tweets
+
+
+@app.get("/clean-app-review")
+def clean_app_review(review_id: str) -> str | None:
+    review = reviews_collection.find_one({"_id": ObjectId(review_id)})
+    if not review:
+        raise HTTPException(status_code=404, detail="Review not found")
+    cleaned_review = clean_review(review["review"])
+    return cleaned_review
+
+
+@app.get("/clean-news")
+def clean_news(news_id: str) -> str:
+    news = news_collection.find_one({"_id": ObjectId(news_id)})
+    if not news:
+        raise HTTPException(status_code=404, detail="News not found")
+    cleaned_news = clean_news_content(news["content"])
+    return cleaned_news
+
+
+@app.get("/clean-tweet")
+def clean_tweet(tweet_id: str) -> str:
+    tweet = tweets_collection.find_one({"_id": ObjectId(tweet_id)})
+    if not tweet:
+        raise HTTPException(status_code=404, detail="Tweet not found")
+    cleaned_tweet = clean_tweet_text(tweet["text"])
+    return cleaned_tweet
