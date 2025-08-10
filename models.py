@@ -233,3 +233,36 @@ class UseCaseDiagramResponse(BaseModel):
     diagrams_puml: list[str]
     diagrams_url: list[str]
     stats: dict
+
+
+class AIUserStoryItem(BaseModel):
+    who: str
+    what: str
+    why: Optional[str] = None
+    as_a_i_want_so_that: str
+    evidence: str
+    sentiment: str
+    confidence: float
+    content_id: Optional[str] = None  # added
+
+
+class GenerateAIUserStoriesRequest(BaseModel):
+    content_type: Literal["review", "news", "tweet", "mixed", "raw"]
+    content: str
+    project_id: Optional[str] = None
+    persist: bool = False
+    content_id: Optional[str] = None  # added
+
+
+class GenerateAIUserStoriesResponse(BaseModel):
+    project_id: Optional[str] = None
+    content_id: Optional[str] = None  # added (top-level reference)
+    count: int
+    stories: list[AIUserStoryItem]
+
+
+class AIUserStoryDocOut(AIUserStoryItem):
+    id: str = Field(alias="_id")
+    project_id: Optional[str] = None
+    content_type: Optional[str] = None
+    created_at: Optional[datetime] = None
