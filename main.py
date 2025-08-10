@@ -4,14 +4,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import settings
 from models import (
     AppModel,
+    ExtractRequest,
     NewsModel,
     ReviewModel,
+    StoryOut,
     TwitterModel,
     ProjectModel,
     CreateProjectRequest,
     ProjectDataSources,
     UpdateProjectConfigRequest,
-    ProjectFetchState,  # added
+    ProjectFetchState,
+    _to_story_out,  # added
 )
 from services.get_queries import generate_queries_from_case_study
 from services.app_scrapper import (
@@ -35,6 +38,8 @@ from pymongo import ReturnDocument
 from services.preprocessing import clean_news_content, clean_review, clean_tweet_text
 from services.twitter_x_scrapper import scrap_twitter_x
 from bson.objectid import ObjectId
+
+from services.user_story_extractor import extract_user_stories
 
 
 app = FastAPI()
@@ -365,3 +370,18 @@ def clean_tweet(tweet_id: str) -> str:
         raise HTTPException(status_code=404, detail="Tweet not found")
     cleaned_tweet = clean_tweet_text(tweet["text"])
     return cleaned_tweet
+
+
+@app.post("/extract-user-story", response_model=list[StoryOut])
+def extract_user_story(req: ExtractRequest):
+    try:
+        models = extract_user_stories(
+            source=req.source,
+            source_id=req.source_id,
+            content=req.content,
+            min_similarity=req.min_similarity,
+            dedupe=req.dedupe,
+        )
+        return [_to_story_out(m) for m in models]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Extraction failed: {e}")

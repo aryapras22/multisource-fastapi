@@ -132,3 +132,57 @@ class TwitterModel(BaseModel):
         populate_by_name=True,
         arbitrary_types_allowed=True,
     )
+
+
+SourceType = Literal["review", "news", "tweet"]
+
+
+class UserStoryModel(BaseModel):
+    id: PyObjectId = Field(alias="_id")
+    who: str
+    what: str
+    why: Optional[str]
+    full_sentence: str
+    similarity_score: float
+    source: SourceType
+    source_id: str
+
+    model_config = ConfigDict(
+        populate_by_name=True,
+        arbitrary_types_allowed=True,
+    )
+
+
+class ExtractRequest(BaseModel):
+    source: SourceType
+    source_id: str
+    content: str
+    min_similarity: float = 0.70
+    dedupe: bool = True
+
+
+class StoryOut(BaseModel):
+    """Response model that stringifies the _id for JSON."""
+
+    id: str = Field(alias="_id")
+    who: str
+    what: str
+    why: Optional[str] = None
+    full_sentence: str
+    similarity_score: float
+    source: SourceType
+    source_id: str
+    model_config = ConfigDict(populate_by_name=True)
+
+
+def _to_story_out(m: UserStoryModel) -> StoryOut:
+    return StoryOut(
+        _id=str(m.id),  # type: ignore[arg-type]
+        who=m.who,
+        what=m.what,
+        why=m.why,
+        full_sentence=m.full_sentence,
+        similarity_score=m.similarity_score,
+        source=m.source,
+        source_id=m.source_id,
+    )
