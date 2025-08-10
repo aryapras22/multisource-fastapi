@@ -153,6 +153,7 @@ def extract_user_stories(
     source: Literal["review", "news", "tweet"],
     source_id: str,
     content: str,
+    project_id: str,
     min_similarity: float = 0.70,
     dedupe: bool = True,
 ) -> List[UserStoryModel]:
@@ -200,12 +201,9 @@ def extract_user_stories(
 
     if not filtered:
         return []
-
-    # 4) Persist to Mongo and return models
     docs = []
     models: List[UserStoryModel] = []
     for c in filtered:
-        print(c)
         user_story_id = str(uuid.uuid4())
         m = UserStoryModel(
             _id=user_story_id,
@@ -216,11 +214,22 @@ def extract_user_stories(
             similarity_score=c["similarity"],
             source=source,
             source_id=source_id,
+            project_id=project_id,  # added
         )
         models.append(m)
-        docs.append(m.model_dump(by_alias=True))
-
+        docs.append(
+            {
+                "_id": user_story_id,
+                "who": m.who,
+                "what": m.what,
+                "why": m.why,
+                "full_sentence": m.full_sentence,
+                "similarity_score": m.similarity_score,
+                "source": m.source,
+                "source_id": m.source_id,
+                "project_id": m.project_id,  # added
+            }
+        )
     if docs:
         user_stories_collection.insert_many(docs)
-
     return models

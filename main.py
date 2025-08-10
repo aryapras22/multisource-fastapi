@@ -12,9 +12,12 @@ from models import (
     ProjectModel,
     CreateProjectRequest,
     ProjectDataSources,
+    UpdateFetchStateRequest,
     UpdateProjectConfigRequest,
     ProjectFetchState,
-    _to_story_out,  # added
+    _to_story_out,
+    StoryWithSourceOut,
+    SourceInfo,
 )
 from services.get_queries import generate_queries_from_case_study
 from services.app_scrapper import (
@@ -32,6 +35,7 @@ from db import (
     reviews_collection,
     news_collection,
     tweets_collection,
+    user_stories_collection,
 )
 from pymongo.errors import DuplicateKeyError
 from pymongo import ReturnDocument
@@ -379,9 +383,211 @@ def extract_user_story(req: ExtractRequest):
             source=req.source,
             source_id=req.source_id,
             content=req.content,
+            project_id=req.project_id,  # added
             min_similarity=req.min_similarity,
             dedupe=req.dedupe,
         )
         return [_to_story_out(m) for m in models]
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Extraction failed: {e}")
+
+
+@app.post("/backfill-user-story-project-ids")
+def backfill_user_story_project_ids():
+    updated = 0
+    cursor = user_stories_collection.find({"project_id": {"$exists": False}})
+    for us in cursor:
+        src = us.get("source")
+        sid = us.get("source_id")
+        proj_id = None
+        if src == "review":
+            doc = (
+                reviews_collection.find_one({"_id": sid})
+                or reviews_collection.find_one({"_id": ObjectId(sid)})
+                if ObjectId.is_valid(str(sid))
+                else None
+            )
+        elif src == "news":
+            doc = (
+                news_collection.find_one({"_id": sid})
+                or news_collection.find_one({"_id": ObjectId(sid)})
+                if ObjectId.is_valid(str(sid))
+                else None
+            )
+        elif src == "tweet":
+            doc = (
+                tweets_collection.find_one({"_id": sid})
+                or tweets_collection.find_one({"_id": ObjectId(sid)})
+                if ObjectId.is_valid(str(sid))
+                else None
+            )
+        else:
+            doc = None
+        if doc:
+            proj_id = doc.get("project_id")
+        if proj_id:
+            user_stories_collection.update_one(
+                {"_id": us["_id"]}, {"$set": {"project_id": proj_id}}
+            )
+            updated += 1
+    return {"updated": updated}
+
+
+@app.get("/get-project-user-stories", response_model=list[StoryWithSourceOut])
+def get_project_user_stories(project_id: str):
+    stories_cur = user_stories_collection.find({"project_id": project_id})
+    stories_raw = list(stories_cur)
+    if not stories_raw:
+        return []
+
+    # Partition source_ids by type
+    ids_by_type: dict[str, set[str]] = {"review": set(), "news": set(), "tweet": set()}
+    for s in stories_raw:
+        sid = str(s.get("source_id", ""))
+        stype = s.get("source")
+        if stype in ids_by_type and sid:
+            ids_by_type[stype].add(sid)
+
+    def _fetch_many(coll, raw_ids: set[str]):
+        if not raw_ids:
+            return {}
+        obj_ids = []
+        str_ids = []
+        for _id in raw_ids:
+            if ObjectId.is_valid(_id):
+                obj_ids.append(ObjectId(_id))
+            str_ids.append(_id)
+        # Try both ObjectId and string _id (in case some were stored as str)
+        q = {"$or": [{"_id": {"$in": obj_ids}}] if obj_ids else []}
+        q["$or"].append({"_id": {"$in": str_ids}})
+        docs = list(coll.find({"$or": q["$or"]}))
+        result = {}
+        for d in docs:
+            result[str(d["_id"])] = d
+        return result
+
+    review_docs = _fetch_many(reviews_collection, ids_by_type["review"])
+    news_docs = _fetch_many(news_collection, ids_by_type["news"])
+    tweet_docs = _fetch_many(tweets_collection, ids_by_type["tweet"])
+
+    out: list[StoryWithSourceOut] = []
+    for s in stories_raw:
+        # Normalize / back compat
+        s_id = s.get("_id")
+        s["_id"] = str(s_id)
+        s.setdefault("why", None)
+        if "similarity_score" not in s and "similarity" in s:
+            s["similarity_score"] = s["similarity"]
+        s.setdefault("similarity_score", 0.0)
+
+        stype: str = s.get("source", "")
+        sid = str(s.get("source_id", ""))
+
+        # Build source_data
+        src_info: SourceInfo
+        if stype == "review":
+            doc = review_docs.get(sid)
+            if not doc:
+                # fallback empty
+                src_info = SourceInfo(
+                    type="review",
+                    title="(review)",
+                    content="",
+                )
+            else:
+                title = (doc.get("review") or "")[:60] or "(review)"
+                src_info = SourceInfo(
+                    type="review",
+                    title=title,
+                    author=doc.get("reviewer"),
+                    content=doc.get("review") or "",
+                    rating=(
+                        float(doc.get("rating"))
+                        if doc.get("rating") is not None
+                        else None
+                    ),
+                )
+        elif stype == "news":
+            doc = news_docs.get(sid)
+            if not doc:
+                src_info = SourceInfo(
+                    type="news",
+                    title="(news)",
+                    content="",
+                )
+            else:
+                src_info = SourceInfo(
+                    type="news",
+                    title=doc.get("title") or "(news)",
+                    author=doc.get("author"),
+                    content=doc.get("content") or (doc.get("description") or ""),
+                    link=doc.get("link"),
+                )
+        elif stype == "tweet":
+            doc = tweet_docs.get(sid)
+            if not doc:
+                src_info = SourceInfo(
+                    type="tweet",
+                    title="(tweet)",
+                    content="",
+                )
+            else:
+                text = doc.get("text") or ""
+                title = text[:60] or "(tweet)"
+                author_obj = doc.get("author") or {}
+                author_name = author_obj.get("username") or author_obj.get("name")
+                src_info = SourceInfo(
+                    type="tweet",  # frontend expects plural "tweets"
+                    title=title,
+                    author=author_name,
+                    content=text,
+                    link=doc.get("url"),
+                )
+        else:
+            # Unknown source type
+            src_info = SourceInfo(
+                type="review",
+                title="(unknown)",
+                content="",
+            )
+
+        try:
+            base_story = StoryOut.model_validate(s)
+            out.append(
+                StoryWithSourceOut(
+                    **base_story.model_dump(by_alias=True),
+                    source_data=src_info,
+                )
+            )
+        except Exception:
+            continue
+
+    # Optional ordering
+    out.sort(key=lambda x: x.similarity_score, reverse=True)
+    return out
+
+
+@app.post("/update-project-fetch-state")
+def update_project_fetch_state(payload: UpdateFetchStateRequest):
+    allowed_keys = [
+        "appStores",
+        "news",
+        "socialMedia",
+        "reviews",
+        "userStories",
+        "useCase",
+    ]
+    set_ops = {}
+    for k in allowed_keys:
+        v = getattr(payload, k)
+        if v is not None:
+            set_ops[f"fetchState.{k}"] = v
+    if not set_ops:
+        raise HTTPException(status_code=400, detail="No fetchState fields provided")
+    result = project_collection.update_one(
+        {"_id": payload.project_id}, {"$set": set_ops}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    project = project_collection.find_one({"_id": payload.project_id})

@@ -24,6 +24,18 @@ class ProjectFetchState(BaseModel):
     news: bool = False
     socialMedia: bool = False
     reviews: bool = False
+    userStories: bool = False
+    useCase: bool = False
+
+
+class UpdateFetchStateRequest(BaseModel):
+    project_id: str
+    appStores: Optional[bool] = None
+    news: Optional[bool] = None
+    socialMedia: Optional[bool] = None
+    reviews: Optional[bool] = None
+    userStories: Optional[bool] = None
+    useCase: Optional[bool] = None
 
 
 class ProjectDataSources(BaseModel):
@@ -146,6 +158,7 @@ class UserStoryModel(BaseModel):
     similarity_score: float
     source: SourceType
     source_id: str
+    project_id: str
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -157,13 +170,12 @@ class ExtractRequest(BaseModel):
     source: SourceType
     source_id: str
     content: str
+    project_id: str  # added
     min_similarity: float = 0.70
     dedupe: bool = True
 
 
 class StoryOut(BaseModel):
-    """Response model that stringifies the _id for JSON."""
-
     id: str = Field(alias="_id")
     who: str
     what: str
@@ -172,12 +184,13 @@ class StoryOut(BaseModel):
     similarity_score: float
     source: SourceType
     source_id: str
+    project_id: str  # added
     model_config = ConfigDict(populate_by_name=True)
 
 
 def _to_story_out(m: UserStoryModel) -> StoryOut:
     return StoryOut(
-        _id=str(m.id),  # type: ignore[arg-type]
+        _id=str(m.id),
         who=m.who,
         what=m.what,
         why=m.why,
@@ -185,4 +198,18 @@ def _to_story_out(m: UserStoryModel) -> StoryOut:
         similarity_score=m.similarity_score,
         source=m.source,
         source_id=m.source_id,
+        project_id=m.project_id,
     )
+
+
+class SourceInfo(BaseModel):
+    type: Literal["news", "review", "tweet"]  # changed from tweets -> tweet
+    title: str
+    author: Optional[str] = None
+    content: str
+    link: Optional[str] = None
+    rating: Optional[float] = None
+
+
+class StoryWithSourceOut(StoryOut):
+    source_data: SourceInfo
