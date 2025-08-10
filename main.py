@@ -140,6 +140,41 @@ async def get_project_queries(project_id: str):
     return queries
 
 
+@app.get("/get-project-apps", response_model=list[AppModel])
+def get_project_apps(project_id: str) -> list:
+    doc = apps_collection.find({"project_id": project_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Apps not found")
+
+    return list(doc)
+
+
+@app.get("/get-project-app-reviews", response_model=list[ReviewModel])
+def get_project_app_reviews(project_id: str) -> list:
+    doc = reviews_collection.find({"project_id": project_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Reviews not found")
+
+    return list(doc)
+
+
+@app.get("/get-project-news", response_model=list[NewsModel])
+def get_project_news(project_id: str) -> list:
+    doc = news_collection.find({"project_id": project_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail="News not found")
+    return list(doc)
+
+
+@app.get("/get-project-tweets", response_model=list[TwitterModel])
+def get_project_tweets(project_id: str) -> list:
+    doc = tweets_collection.find({"project_id": project_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Tweets not found")
+
+    return list(doc)
+
+
 @app.get("/get-apps", response_model=list[AppModel])
 async def get_apps(project_id: str, limit: int = 10) -> list:
     case_study_data = project_collection.find_one({"_id": project_id})
