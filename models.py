@@ -213,3 +213,23 @@ class SourceInfo(BaseModel):
 
 class StoryWithSourceOut(StoryOut):
     source_data: SourceInfo
+
+
+class UseCaseDiagramDoc(BaseModel):
+    id: PyObjectId = Field(alias="_id")
+    project_id: str
+    diagrams_puml: list[str]
+    diagrams_url: list[str]
+    stats: dict
+    model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
+
+
+class GenerateUseCaseRequest(BaseModel):
+    project_id: str
+
+
+class UseCaseDiagramResponse(BaseModel):
+    project_id: str
+    diagrams_puml: list[str]
+    diagrams_url: list[str]
+    stats: dict

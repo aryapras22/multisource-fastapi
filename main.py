@@ -44,9 +44,11 @@ from services.twitter_x_scrapper import scrap_twitter_x
 from bson.objectid import ObjectId
 
 from services.user_story_extractor import extract_user_stories
+from api.usecase_api import router as usecase_router
 
 
 app = FastAPI()
+app.include_router(usecase_router)
 
 origins = [settings.frontend_origin, "http://127.0.0.1:5173"]
 
