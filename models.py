@@ -26,6 +26,8 @@ class ProjectFetchState(BaseModel):
     reviews: bool = False
     userStories: bool = False
     useCase: bool = False
+    aiUserStories: Optional[bool] = None
+    aiUseCase: Optional[bool] = None
 
 
 class UpdateFetchStateRequest(BaseModel):
@@ -36,6 +38,8 @@ class UpdateFetchStateRequest(BaseModel):
     reviews: Optional[bool] = None
     userStories: Optional[bool] = None
     useCase: Optional[bool] = None
+    aiUserStories: Optional[bool] = None
+    aiUseCase: Optional[bool] = None
 
 
 class ProjectDataSources(BaseModel):

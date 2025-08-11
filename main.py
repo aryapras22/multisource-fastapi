@@ -286,7 +286,10 @@ async def get_news(project_id: str, query: str, count: int = 10) -> list[NewsMod
         )
         return existing_articles
     news = await asyncio.to_thread(scrap_news, query, count=count)
-    articles = news.get("articles", [])  # type: ignore
+    if isinstance(news, list):
+        articles = news
+    else:
+        articles = news.get("articles", []) if hasattr(news, "get") else []
     if not articles:
         return []
     processed_articles = []
@@ -581,6 +584,8 @@ def update_project_fetch_state(payload: UpdateFetchStateRequest):
         "reviews",
         "userStories",
         "useCase",
+        "aiUserStories",
+        "aiUseCase",
     ]
     set_ops = {}
     for k in allowed_keys:

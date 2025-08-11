@@ -4,11 +4,24 @@ from models import (
     GenerateAIUserStoriesRequest,
     GenerateAIUserStoriesResponse,
     AIUserStoryItem,
+    SourceInfo,
 )
 from services.ai_requirement_service import generate_userstory_with_ai
-from db import ai_stories_collection
+from db import (
+    ai_stories_collection,
+    reviews_collection,
+    news_collection,
+    tweets_collection,
+)
 import uuid
 from datetime import datetime
+from bson.objectid import ObjectId
+from pydantic import BaseModel
+
+
+class AIUserStoryWithSourceOut(AIUserStoryDocOut):
+    source_data: SourceInfo
+
 
 router = APIRouter(prefix="/ai", tags=["ai-userstories"])
 
@@ -60,18 +73,142 @@ async def generate_ai_user_stories(payload: GenerateAIUserStoriesRequest):
     )
 
 
-@router.get("/user-stories", response_model=list[AIUserStoryDocOut])
+@router.get("/user-stories", response_model=list[AIUserStoryWithSourceOut])
 async def list_ai_user_stories(project_id: str):
     q = {"project_id": project_id}
     docs = list(ai_stories_collection.find(q).sort("created_at", -1))
-    out: list[AIUserStoryDocOut] = []
-    for d in docs:
-        # Backward compatibility / defaults
-        d.setdefault("why", None)
-        d.setdefault("content_type", None)
+
+    if not docs:
+        return []
+
+    # Group content_ids by content_type
+    ids_by_type = {"review": set(), "news": set(), "tweet": set()}
+    for s in docs:
+        cid = str(s.get("content_id", ""))
+        ctype = s.get("content_type")
+        if ctype in ids_by_type and cid:
+            ids_by_type[ctype].add(cid)
+
+    # Helper function to fetch source documents by ID
+    def _fetch_many(coll, raw_ids: set[str]):
+        if not raw_ids:
+            return {}
+        obj_ids = []
+        str_ids = []
+        for _id in raw_ids:
+            if ObjectId.is_valid(_id):
+                obj_ids.append(ObjectId(_id))
+            str_ids.append(_id)
+        # Try both ObjectId and string _id (in case some were stored as str)
+        q = {"$or": [{"_id": {"$in": obj_ids}}] if obj_ids else []}
+        q["$or"].append({"_id": {"$in": str_ids}})
+        docs = list(coll.find({"$or": q["$or"]}))
+        result = {}
+        for d in docs:
+            result[str(d["_id"])] = d
+        return result
+
+    # Fetch source content data
+    review_docs = _fetch_many(reviews_collection, ids_by_type["review"])
+    news_docs = _fetch_many(news_collection, ids_by_type["news"])
+    tweet_docs = _fetch_many(tweets_collection, ids_by_type["tweet"])
+
+    # Build response with source data
+    out = []
+    for s in docs:
+        # Normalize data
+        s["_id"] = str(s["_id"])
+        s.setdefault("why", None)
+        s.setdefault("content_type", None)
+        s.setdefault("confidence", 0.0)
+
+        ctype = s.get("content_type")
+        cid = str(s.get("content_id", ""))
+
+        # Build source_data
+        src_info: SourceInfo
+        if ctype == "review":
+            doc = review_docs.get(cid)
+            if not doc:
+                src_info = SourceInfo(
+                    type="review",
+                    title="(review)",
+                    content="",
+                )
+            else:
+                title = (doc.get("review") or "")[:60] or "(review)"
+                src_info = SourceInfo(
+                    type="review",
+                    title=title,
+                    author=doc.get("reviewer"),
+                    content=doc.get("review") or "",
+                    rating=(
+                        float(doc.get("rating"))
+                        if doc.get("rating") is not None
+                        else None
+                    ),
+                )
+        elif ctype == "news":
+            doc = news_docs.get(cid)
+            if not doc:
+                src_info = SourceInfo(
+                    type="news",
+                    title="(news)",
+                    content="",
+                )
+            else:
+                src_info = SourceInfo(
+                    type="news",
+                    title=doc.get("title") or "(news)",
+                    author=doc.get("author"),
+                    content=doc.get("content") or (doc.get("description") or ""),
+                    link=doc.get("link"),
+                )
+        elif ctype == "tweet":
+            doc = tweet_docs.get(cid)
+            if not doc:
+                src_info = SourceInfo(
+                    type="tweet",
+                    title="(tweet)",
+                    content="",
+                )
+            else:
+                text = doc.get("text") or ""
+                title = text[:60] or "(tweet)"
+                author_obj = doc.get("author") or {}
+                author_name = author_obj.get("username") or author_obj.get("name")
+                src_info = SourceInfo(
+                    type="tweet",
+                    title=title,
+                    author=author_name,
+                    content=text,
+                    link=doc.get("url"),
+                )
+        elif ctype == "raw" or not ctype:
+            # For raw text input without a source document
+            src_info = SourceInfo(
+                type="review",  # Default type
+                title="(Raw Input)",
+                content=s.get("evidence", ""),
+            )
+        else:
+            src_info = SourceInfo(
+                type="review",
+                title="(unknown)",
+                content="",
+            )
+
         try:
-            d["_id"] = str(d["_id"])
-            out.append(AIUserStoryDocOut.model_validate(d))
+            base_story = AIUserStoryDocOut.model_validate(s)
+            out.append(
+                AIUserStoryWithSourceOut(
+                    **base_story.model_dump(by_alias=True),
+                    source_data=src_info,
+                )
+            )
         except Exception:
             continue
+
+    # Sort by confidence score (highest first)
+    out.sort(key=lambda x: x.confidence, reverse=True)
     return out

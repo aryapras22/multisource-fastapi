@@ -7,7 +7,12 @@ from datetime import datetime
 from bson import ObjectId
 from plantuml import PlantUML
 
-from db import user_stories_collection, use_cases_collection
+from db import (
+    user_stories_collection,
+    use_cases_collection,
+    ai_stories_collection,
+    ai_use_cases_collection,
+)
 
 # ---- Configs ----
 PLANTUML_SERVER = "http://www.plantuml.com/plantuml/img/"
@@ -54,7 +59,7 @@ def _collect_from_stories(project_id: str):
     for s in cursor:
         who = (s.get("who") or "user").strip()
         what = (s.get("what") or "").strip()
-        full_sentence = (s.get("full_sentence") or "").strip()
+        # full_sentence = (s.get("full_sentence") or "").strip()
         why = s.get("why") or None
 
         if not what:
@@ -71,9 +76,9 @@ def _collect_from_stories(project_id: str):
                 "sentences": [],
                 "whys": [],
             }
-        if full_sentence:
-            if full_sentence not in usecase_map[key]["sentences"]:
-                usecase_map[key]["sentences"].append(full_sentence)
+        # if full_sentence:
+        #     if full_sentence not in usecase_map[key]["sentences"]:
+        #         usecase_map[key]["sentences"].append(full_sentence)
         if why:
             if why not in usecase_map[key]["whys"]:
                 usecase_map[key]["whys"].append(why)
@@ -194,6 +199,98 @@ def create_use_case_diagrams_by_project(project_id: str) -> dict:
         },
     }
     use_cases_collection.insert_one(doc)
+
+    return {
+        "project_id": project_id,
+        "diagrams_puml": puml_list,
+        "diagrams_url": urls,
+        "stats": {
+            "actors": len(actor_set),
+            "usecases": len(usecase_map),
+            "edges": len(edges),
+        },
+    }
+
+
+def _collect_from_ai_stories(project_id: str):
+    """
+    Pull all AI-generated stories for a project_id and produce:
+      - usecase_map: key -> {label, sentences, whys}
+      - actor_set: set of actor labels
+      - edges: set of (actor_label, usecase_key)
+    """
+    cursor = ai_stories_collection.find({"project_id": project_id})
+    usecase_map: Dict[str, Dict] = {}
+    actor_set: Set[str] = set()
+    edges: Set[Tuple[str, str]] = set()
+
+    for s in cursor:
+        who = (s.get("who") or "user").strip()
+        what = (s.get("what") or "").strip()
+        why = s.get("why") or None
+
+        if not what:
+            continue
+
+        actor_label = _ws_re.sub(" ", who).strip() or "user"
+        actor_set.add(actor_label)
+
+        key = _normalize_key(what)
+        if key not in usecase_map:
+            usecase_map[key] = {
+                "label": what,
+                "sentences": [],
+                "whys": [],
+            }
+        if why:
+            if why not in usecase_map[key]["whys"]:
+                usecase_map[key]["whys"].append(why)
+
+        edges.add((actor_label, key))
+
+    return usecase_map, actor_set, edges
+
+
+def create_use_case_diagrams_from_ai_stories(project_id: str) -> dict:
+    """
+    Creates use case diagrams from AI-generated user stories:
+    - Reads ai_user_stories_collection
+    - Merges duplicate use cases by normalized 'what'
+    - Builds PlantUML diagrams (chunked)
+    - Returns PUML text + image URLs
+    - Upserts into use_cases_collection (one doc per project_id)
+    """
+    usecase_map, actor_set, edges = _collect_from_ai_stories(project_id)
+
+    if not usecase_map:
+        return {
+            "project_id": project_id,
+            "diagrams_puml": [],
+            "diagrams_url": [],
+            "stats": {"actors": 0, "usecases": 0, "edges": 0},
+        }
+
+    puml_list = _render_puml_chunks(project_id, usecase_map, actor_set, edges)
+
+    # Resolve URLs via PlantUML server
+    client = PlantUML(url=PLANTUML_SERVER)
+    urls = [client.get_url(puml) for puml in puml_list]
+
+    # Store in use_cases_collection with source indicator
+    doc = {
+        "_id": ObjectId(),
+        "project_id": project_id,
+        "generated_at": datetime.utcnow(),
+        "source": "ai_generated",  # Indicate this is from AI stories
+        "diagrams_puml": puml_list,
+        "diagrams_url": urls,
+        "stats": {
+            "actors": len(actor_set),
+            "usecases": len(usecase_map),
+            "edges": len(edges),
+        },
+    }
+    ai_use_cases_collection.insert_one(doc)
 
     return {
         "project_id": project_id,
