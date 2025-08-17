@@ -8,7 +8,7 @@ from sentence_transformers import SentenceTransformer
 from sklearn.cluster import AgglomerativeClustering
 from sklearn.metrics.pairwise import cosine_similarity
 
-from db import user_stories_collection
+from db import user_stories_collection, ai_stories_collection
 
 # Load a pre-trained model for creating sentence embeddings.
 # This model is good for semantic similarity tasks.
@@ -114,6 +114,85 @@ def cluster_and_summarize_stories(
         )
 
     # Sort clusters by size (largest first)
+    output_clusters.sort(key=lambda x: x["size"], reverse=True)
+
+    return {"project_id": project_id, "clusters": output_clusters}
+
+
+def _get_ai_stories_by_project(project_id: str) -> List[Dict[str, Any]]:
+    """Mengambil semua cerita pengguna AI untuk proyek tertentu dari database."""
+    cursor = ai_stories_collection.find({"project_id": project_id})
+    # ID sudah berupa string (UUID), jadi tidak perlu konversi ObjectId
+    return list(cursor)
+
+
+def _vectorize_ai_stories(stories: List[Dict[str, Any]]) -> np.ndarray:
+    """
+    Mengonversi daftar cerita pengguna AI menjadi vektor numerik.
+    Teks dari field 'what' digunakan untuk membuat embedding.
+    """
+    sentences = [s.get("what", "") for s in stories]
+    embeddings = embedding_model.encode(sentences, show_progress_bar=False)
+    return embeddings
+
+
+def cluster_and_summarize_ai_stories(
+    project_id: str, distance_threshold: float = 0.5
+) -> Dict[str, Any]:
+    """
+    Fungsi utama untuk mengambil, mengelompokkan, dan merangkum cerita pengguna AI untuk sebuah proyek.
+    """
+    stories = _get_ai_stories_by_project(project_id)
+    if not stories:
+        return {"project_id": project_id, "clusters": []}
+
+    embeddings = _vectorize_ai_stories(stories)
+
+    clustering = AgglomerativeClustering(
+        n_clusters=None,
+        distance_threshold=distance_threshold,
+        metric="cosine",
+        linkage="average",
+    ).fit(embeddings)
+
+    clustered_stories = defaultdict(list)
+    for i, story in enumerate(stories):
+        label = clustering.labels_[i]
+        clustered_stories[label].append(story)
+
+    output_clusters = []
+    for label, cluster_items in clustered_stories.items():
+        if not cluster_items:
+            continue
+
+        item_indices = [stories.index(item) for item in cluster_items]
+        cluster_embeddings = embeddings[item_indices]
+        centroid = np.mean(cluster_embeddings, axis=0)
+        similarities = cosine_similarity(cluster_embeddings, centroid.reshape(1, -1))
+        representative_idx = np.argmax(similarities)
+        representative_story = cluster_items[representative_idx]
+
+        # Gunakan 'content_type' sebagai sumber
+        sources = sorted(
+            list(
+                {
+                    item.get("content_type")
+                    for item in cluster_items
+                    if item.get("content_type")
+                }
+            )
+        )
+
+        output_clusters.append(
+            {
+                "cluster_id": int(label),
+                "representative_story": representative_story,
+                "stories": cluster_items,
+                "size": len(cluster_items),
+                "sources": sources,
+            }
+        )
+
     output_clusters.sort(key=lambda x: x["size"], reverse=True)
 
     return {"project_id": project_id, "clusters": output_clusters}

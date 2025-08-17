@@ -297,3 +297,16 @@ class AIUserStoryDocOut(AIUserStoryItem):
     project_id: Optional[str] = None
     content_type: Optional[str] = None
     created_at: Optional[datetime] = None
+
+
+class AIStoryCluster(BaseModel):
+    cluster_id: int
+    representative_story: AIUserStoryDocOut
+    stories: list[AIUserStoryDocOut]
+    size: int
+    sources: list[str]
+
+
+class AIClusteringResponse(BaseModel):
+    project_id: str
+    clusters: list[AIStoryCluster]

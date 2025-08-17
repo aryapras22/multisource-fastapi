@@ -5,8 +5,9 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 
-from models import UserStoryModel
+from models import AIClusteringResponse, UserStoryModel
 from services.clustering_service import (
+    cluster_and_summarize_ai_stories,
     cluster_and_summarize_stories,
 )  # Assuming UserStoryModel is in a shared models file
 
@@ -55,4 +56,26 @@ def get_clustered_user_stories(
         # Log the exception e for debugging
         raise HTTPException(
             status_code=500, detail=f"Failed to process and cluster stories: {e}"
+        )
+
+
+@router.get("/ai_user_stories/{project_id}", response_model=AIClusteringResponse)
+def get_clustered_ai_user_stories(
+    project_id: str,
+    distance: float = Query(
+        0.5,
+        ge=0,
+        le=1.0,
+        title="Distance Threshold",
+        description="Similarity distance for clustering (lower means more similar).",
+    ),
+):
+    try:
+        result = cluster_and_summarize_ai_stories(
+            project_id=project_id, distance_threshold=distance
+        )
+        return AIClusteringResponse(**result)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to process and cluster AI stories: {e}"
         )
