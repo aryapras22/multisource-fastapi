@@ -79,6 +79,11 @@ class UpdateProjectConfigRequest(BaseModel):
     description: Optional[str] = None
 
 
+class UpdateProjectStatusRequest(BaseModel):
+    project_id: str
+    status: Literal["draft", "configured", "analyzing", "complete"]
+
+
 class AppModel(BaseModel):
     id: PyObjectId = Field(alias="_id")
     appName: str
@@ -158,16 +163,29 @@ class UserStoryModel(BaseModel):
     who: str
     what: str
     why: Optional[str]
-    full_sentence: str
+    full_sentence: Optional[str] = None
     similarity_score: float
     source: SourceType
     source_id: str
     project_id: str
+    insight: Optional[Insight] = None  # Ditambahkan
 
     model_config = ConfigDict(
         populate_by_name=True,
         arbitrary_types_allowed=True,
     )
+
+
+class Insight(BaseModel):
+    nfr: list[str]
+    business_impact: str
+    pain_point_jtbd: str
+    fit_score: FitScore
+
+
+class FitScore(BaseModel):
+    score: float
+    explanation: str
 
 
 class ExtractRequest(BaseModel):
@@ -184,11 +202,12 @@ class StoryOut(BaseModel):
     who: str
     what: str
     why: Optional[str] = None
-    full_sentence: str
+    full_sentence: Optional[str] = None
     similarity_score: float
     source: SourceType
     source_id: str
-    project_id: str  # added
+    project_id: str
+    insight: Optional[Insight] = None
     model_config = ConfigDict(populate_by_name=True)
 
 
@@ -203,6 +222,7 @@ def _to_story_out(m: UserStoryModel) -> StoryOut:
         source=m.source,
         source_id=m.source_id,
         project_id=m.project_id,
+        insight=m.insight,  # Ditambahkan
     )
 
 
@@ -239,6 +259,12 @@ class UseCaseDiagramResponse(BaseModel):
     stats: dict
 
 
+class FieldInsight(BaseModel):
+    nfr: list[str]
+    business_impact: str
+    pain_point_jtbd: str
+
+
 class AIUserStoryItem(BaseModel):
     who: str
     what: str
@@ -247,7 +273,8 @@ class AIUserStoryItem(BaseModel):
     evidence: str
     sentiment: str
     confidence: float
-    content_id: Optional[str] = None  # added
+    content_id: Optional[str] = None
+    field_insight: Optional[FieldInsight] = None
 
 
 class GenerateAIUserStoriesRequest(BaseModel):
@@ -255,12 +282,12 @@ class GenerateAIUserStoriesRequest(BaseModel):
     content: str
     project_id: Optional[str] = None
     persist: bool = False
-    content_id: Optional[str] = None  # added
+    content_id: Optional[str] = None
 
 
 class GenerateAIUserStoriesResponse(BaseModel):
     project_id: Optional[str] = None
-    content_id: Optional[str] = None  # added (top-level reference)
+    content_id: Optional[str] = None
     count: int
     stories: list[AIUserStoryItem]
 

@@ -45,25 +45,37 @@ async def generate_ai_user_stories(payload: GenerateAIUserStoriesRequest):
         item = AIUserStoryItem(**s)
         stories.append(item)
         if payload.persist:
-            docs.append(
-                {
-                    "_id": str(uuid.uuid4()),
-                    "who": item.who,
-                    "what": item.what,
-                    "why": item.why,
-                    "as_a_i_want_so_that": item.as_a_i_want_so_that,
-                    "evidence": item.evidence,
-                    "sentiment": item.sentiment,
-                    "confidence": item.confidence,
-                    "content_type": payload.content_type,
-                    "content_id": payload.content_id,
-                    "project_id": payload.project_id,
-                    "created_at": datetime.utcnow(),
-                }
-            )
+            doc_to_save = {
+                "_id": str(uuid.uuid4()),
+                "who": item.who,
+                "what": item.what,
+                "why": item.why,
+                "as_a_i_want_so_that": item.as_a_i_want_so_that,
+                "evidence": item.evidence,
+                "sentiment": item.sentiment,
+                "confidence": item.confidence,
+                "content_type": payload.content_type,
+                "content_id": payload.content_id,
+                "project_id": payload.project_id,
+                "created_at": datetime.utcnow(),
+            }
+            if item.field_insight:
+                doc_to_save["field_insight"] = item.field_insight.model_dump()
+            docs.append(doc_to_save)
 
     if payload.persist and docs:
         ai_stories_collection.insert_many(docs)
+
+    for s in docs:
+        # Normalize data
+        s["_id"] = str(s["_id"])
+        s.setdefault("why", None)
+        s.setdefault("content_type", None)
+        s.setdefault("confidence", 0.0)
+        s.setdefault("field_insight", None)
+
+        ctype = s.get("content_type")
+        cid = str(s.get("content_id", ""))
 
     return GenerateAIUserStoriesResponse(
         project_id=payload.project_id,

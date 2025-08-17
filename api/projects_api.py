@@ -10,6 +10,7 @@ from models import (
     ProjectModel,
     UpdateFetchStateRequest,
     UpdateProjectConfigRequest,
+    UpdateProjectStatusRequest,
 )
 from services.get_queries import generate_queries_from_case_study
 
@@ -136,3 +137,28 @@ async def get_project_queries(project_id: str):
         raise HTTPException(status_code=404, detail="Project not found")
     queries = doc.get("queries") or []
     return queries
+
+
+@router.patch("/update-project-status", response_model=ProjectModel)
+async def update_project_status(payload: UpdateProjectStatusRequest):
+    """
+    Memperbarui status proyek tertentu.
+    """
+    updated_project = project_collection.find_one_and_update(
+        {"_id": payload.project_id},
+        {"$set": {"status": payload.status}},
+        return_document=ReturnDocument.AFTER,
+    )
+
+    if not updated_project:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Proyek dengan id '{payload.project_id}' tidak ditemukan",
+        )
+
+    # Pastikan field default ada untuk konsistensi respons
+    updated_project.setdefault("queries", [])
+    updated_project.setdefault("dataSources", ProjectDataSources().model_dump())
+    updated_project.setdefault("fetchState", ProjectFetchState().model_dump())
+
+    return updated_project

@@ -140,7 +140,7 @@ def get_project_user_stories(project_id: str):
                 link=doc.get("url") if doc else None,
             )
         else:
-            src_info = SourceInfo(type="unknown", title="(unknown)", content="")
+            src_info = SourceInfo(type="review", title="(unknown)", content="")
 
         try:
             base_story = StoryOut.model_validate(s)
@@ -154,3 +154,50 @@ def get_project_user_stories(project_id: str):
 
     out.sort(key=lambda x: x.similarity_score, reverse=True)
     return out
+
+
+@router.post("/clean-duplicates")
+def clean_duplicate_user_stories(project_id: str):
+    """
+    Finds and removes duplicate user stories for a given project.
+    A duplicate is defined as a story with the same 'source' and 'what'.
+    For each group of duplicates, one is kept and the others are deleted.
+    """
+    pipeline = [
+        {"$match": {"project_id": project_id}},
+        {
+            "$group": {
+                "_id": {"source": "$source", "what": "$what"},
+                "ids": {"$push": "$_id"},
+                "count": {"$sum": 1},
+            }
+        },
+        {"$match": {"count": {"$gt": 1}}},
+    ]
+
+    duplicates = user_stories_collection.aggregate(pipeline)
+
+    ids_to_delete = []
+    for group in duplicates:
+        # Keep the first document, mark the rest for deletion
+        ids_to_delete.extend(group["ids"][1:])
+
+    deleted_count = 0
+    if ids_to_delete:
+        result = user_stories_collection.delete_many({"_id": {"$in": ids_to_delete}})
+        deleted_count = result.deleted_count
+
+    return {"deleted_count": deleted_count}
+
+
+@router.get("/get-project-user-story-ids", response_model=list[str])
+def get_project_user_story_ids(project_id: str):
+    """
+    Mengambil hanya ID dari cerita pengguna untuk project_id yang diberikan.
+    """
+    cursor = user_stories_collection.find(
+        {"project_id": project_id},
+        {"_id": 1},  # Proyeksi untuk hanya mendapatkan field _id
+    )
+    ids = [str(doc["_id"]) for doc in cursor]
+    return ids

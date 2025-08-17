@@ -32,10 +32,7 @@ def _vectorize_stories(stories: List[Dict[str, Any]]) -> np.ndarray:
     The text from 'who', 'what', and 'why' fields are combined to create the embedding.
     """
     # Create a single descriptive sentence for each story
-    sentences = [
-        f"{s.get('who', '')} {s.get('what', '')} {s.get('why', '')}".strip()
-        for s in stories
-    ]
+    sentences = [s.get("what", "") for s in stories]
 
     # Generate embeddings for all sentences
     embeddings = embedding_model.encode(sentences, show_progress_bar=False)
@@ -104,7 +101,8 @@ def cluster_and_summarize_stories(
 
         # Collect unique sources within the cluster
         sources = sorted(list({item["source"] for item in cluster_items}))
-
+        for story in cluster_items:
+            story.pop("full_sentence", None)
         output_clusters.append(
             {
                 "cluster_id": int(label),

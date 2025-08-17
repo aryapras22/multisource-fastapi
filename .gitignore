@@ -1,3 +1,4 @@
 .env
 __pycache__
 services/__pycache__
+api/__pycache__

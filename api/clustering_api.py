@@ -6,12 +6,11 @@ from pydantic import BaseModel, Field
 
 
 from models import UserStoryModel
-from services.clustering_service import cluster_and_summarize_stories  # Assuming UserStoryModel is in a shared models file
+from services.clustering_service import (
+    cluster_and_summarize_stories,
+)  # Assuming UserStoryModel is in a shared models file
 
 router = APIRouter(prefix="/clustering", tags=["clustering"])
-
-
-# --- Pydantic Models for API Response ---
 
 
 class Cluster(BaseModel):
@@ -25,9 +24,6 @@ class Cluster(BaseModel):
 class ClusteringResponse(BaseModel):
     project_id: str
     clusters: List[Cluster]
-
-
-# --- API Endpoint ---
 
 
 @router.get("/user_stories/{project_id}", response_model=ClusteringResponse)

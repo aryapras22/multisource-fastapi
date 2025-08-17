@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     ai_userstory_generator_webhook: str = Field(
         alias="AI_USERSTORY_GENERATOR_WEBHOOK", default="NONE"
     )
+    insight_generator_webhook: str = Field(
+        alias="INSIGHT_GENERATOR_WEBHOOK", default="NONE"
+    )
     model_config = SettingsConfigDict(env_file=".env")
 
 

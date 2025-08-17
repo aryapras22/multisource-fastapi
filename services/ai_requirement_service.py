@@ -18,6 +18,7 @@ _REQUIRED_KEYS = {
     "evidence",
     "sentiment",
     "confidence",
+    "field_insight",
 }
 
 
@@ -97,6 +98,9 @@ async def generate_userstory_with_ai(
                 item["confidence"] = float(item["confidence"])
             except Exception:
                 item["confidence"] = 0.0
+
+            if "field_insight" in item and not isinstance(item["field_insight"], dict):
+                item["field_insight"] = None
             cleaned.append(item)
 
         return cleaned
