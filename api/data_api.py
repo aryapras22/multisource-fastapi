@@ -20,6 +20,8 @@ from services.app_scrapper import (
 from services.news_scrapper import scrap_news
 from services.preprocessing import clean_news_content, clean_review, clean_tweet_text
 from services.twitter_x_scrapper import scrap_twitter_x
+from bson import ObjectId
+
 
 router = APIRouter()
 

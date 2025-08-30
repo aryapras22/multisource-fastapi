@@ -1,7 +1,10 @@
 import datetime
 import uuid
+import asyncio
 from fastapi import APIRouter, HTTPException
 from pymongo import ReturnDocument
+from typing import List, Dict, Any
+from bson.objectid import ObjectId
 from db import project_collection
 from models import (
     CreateProjectRequest,
@@ -11,6 +14,17 @@ from models import (
     UpdateFetchStateRequest,
     UpdateProjectConfigRequest,
     UpdateProjectStatusRequest,
+)
+from db import (
+    project_collection,
+    apps_collection,
+    reviews_collection,
+    news_collection,
+    tweets_collection,
+    user_stories_collection,
+    use_cases_collection,
+    ai_stories_collection,
+    ai_use_cases_collection,
 )
 from services.get_queries import generate_queries_from_case_study
 
@@ -162,3 +176,91 @@ async def update_project_status(payload: UpdateProjectStatusRequest):
     updated_project.setdefault("fetchState", ProjectFetchState().model_dump())
 
     return updated_project
+
+
+def serialize_docs(docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Converts ObjectId to string for a list of documents."""
+    for doc in docs:
+        if "_id" in doc:
+            doc["_id"] = str(doc["_id"])
+    return docs
+
+
+@router.get("/projects/{project_id}/apps", response_model=List[Dict[str, Any]])
+def get_project_apps(project_id: str):
+    docs = list(apps_collection.find({"project_id": project_id}))
+    return serialize_docs(docs)
+
+
+@router.get("/projects/{project_id}/reviews", response_model=List[Dict[str, Any]])
+def get_project_reviews(project_id: str):
+    docs = list(reviews_collection.find({"project_id": project_id}))
+    return serialize_docs(docs)
+
+
+@router.get("/projects/{project_id}/news", response_model=List[Dict[str, Any]])
+def get_project_news(project_id: str):
+    docs = list(news_collection.find({"project_id": project_id}))
+    return serialize_docs(docs)
+
+
+@router.get("/projects/{project_id}/tweets", response_model=List[Dict[str, Any]])
+def get_project_tweets(project_id: str):
+    docs = list(tweets_collection.find({"project_id": project_id}))
+    return serialize_docs(docs)
+
+
+@router.get("/projects/{project_id}/user-stories", response_model=List[Dict[str, Any]])
+def get_project_user_stories(project_id: str):
+    docs = list(user_stories_collection.find({"project_id": project_id}))
+    return serialize_docs(docs)
+
+
+@router.get("/projects/{project_id}/use-cases", response_model=List[Dict[str, Any]])
+def get_project_use_cases(project_id: str):
+    docs = list(use_cases_collection.find({"project_id": project_id}))
+    return serialize_docs(docs)
+
+
+@router.get("/projects/{project_id}/ai-stories", response_model=List[Dict[str, Any]])
+def get_project_ai_stories(project_id: str):
+    docs = list(ai_stories_collection.find({"project_id": project_id}))
+    return serialize_docs(docs)
+
+
+@router.get("/projects/{project_id}/ai-use-cases", response_model=List[Dict[str, Any]])
+def get_project_ai_use_cases(project_id: str):
+    docs = list(ai_use_cases_collection.find({"project_id": project_id}))
+    return serialize_docs(docs)
+
+
+@router.get("/projects/{project_id}/all-data", response_model=Dict[str, Any])
+def get_all_project_data(project_id: str):
+    """
+    Fetches all data (project details, apps, reviews, news, tweets, user stories, use cases, ai stories, ai use cases)
+    for a given project_id from their respective collections.
+    """
+    query = {"project_id": project_id}
+    project_doc = project_collection.find_one({"_id": project_id})
+    if not project_doc:
+        raise HTTPException(status_code=404, detail="Project not found")
+    # Convert ObjectId to string for _id
+    if "_id" in project_doc:
+        project_doc["_id"] = str(project_doc["_id"])
+    project_doc.setdefault("queries", [])
+    project_doc.setdefault("dataSources", ProjectDataSources().model_dump())
+    project_doc.setdefault("fetchState", ProjectFetchState().model_dump())
+    project_doc.setdefault("status", "draft")
+
+    data = {
+        "project": project_doc,
+        "apps": serialize_docs(list(apps_collection.find(query))),
+        "reviews": serialize_docs(list(reviews_collection.find(query))),
+        "news": serialize_docs(list(news_collection.find(query))),
+        "tweets": serialize_docs(list(tweets_collection.find(query))),
+        "user_stories": serialize_docs(list(user_stories_collection.find(query))),
+        "use_cases": serialize_docs(list(use_cases_collection.find(query))),
+        "ai_stories": serialize_docs(list(ai_stories_collection.find(query))),
+        "ai_use_cases": serialize_docs(list(ai_use_cases_collection.find(query))),
+    }
+    return data
