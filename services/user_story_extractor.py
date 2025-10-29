@@ -6,59 +6,47 @@ import uuid
 from bson import ObjectId
 
 import spacy
-from spacy.matcher import Matcher
 from spacy.tokens import Doc, Span
 
 from dictionaries.default_dict import software_functionality_dict
 from models import UserStoryModel, PyObjectId
 from db import user_stories_collection
+from services.aspect_identifier import (
+    identify_who_aspect,
+    identify_what_aspect,
+    identify_why_aspect,
+)
+
+import nltk
+
+nltk.download("wordnet")
+nltk.download("omw-1.4")
 
 # ---------------- spaCy setup ----------------
 nlp = spacy.load("en_core_web_lg")
-nlp.add_pipe("merge_noun_chunks", before="ner")
 
-# POS-patterns (same spirit as your original)
-matcher = Matcher(nlp.vocab)
-_patterns = [
-    [{"POS": "VERB"}, {"POS": "ADJ"}, {"POS": "NOUN"}],  # VERB ADJ NOUN
-    [{"POS": "VERB"}, {"POS": "NOUN"}],  # VERB NOUN
-    [{"POS": "VERB"}, {"POS": "ADV", "OP": "?"}, {"POS": "ADJ"}, {"POS": "NOUN"}],
-    [{"POS": "NOUN"}, {"POS": "VERB"}],  # NOUN VERB
-]
-for i, p in enumerate(_patterns):
-    matcher.add(f"GOAL_PATTERN_{i+1}", [p])
-
-# ---------------- WHY extraction (no cleaning) ----------------
-_SO_THAT_RE = re.compile(r"\bso that\b\s+(?P<why>.+)", flags=re.I)
-_BECAUSE_RE = re.compile(r"\bbecause\b\s+(?P<why>.+)", flags=re.I)
-_SO_I_CAN_RE = re.compile(r"\bso (?:I|we) can\b\s+(?P<why>.+)", flags=re.I)
-_TO_VERB_RE = re.compile(
-    r"\bto\s+(?P<why>(?:\w+\s*){1,8})", flags=re.I
-)  # short verb phrase
+# Note: Matcher no longer used as WHAT extraction is handled by aspect_identifier
 
 
+# ---------------- WHY extraction ----------------
 def _extract_why(sentence_text: str) -> Optional[str]:
-    s = sentence_text.strip()
-    for rx in (_SO_THAT_RE, _SO_I_CAN_RE, _BECAUSE_RE, _TO_VERB_RE):
-        m = rx.search(s)
-        if m:
-            why = m.group("why").strip().rstrip(".!?;,:")
-            return why[:200]
+    """
+    Extract WHY aspect using the new aspect_identifier.
+    Returns the first (shortest) why clause or None.
+    """
+    why_candidates = identify_why_aspect(sentence_text)
+    if why_candidates:
+        return why_candidates[0]  # Return the shortest/first candidate
     return None
 
 
 # ---------------- WHO extraction (source-specific) ----------------
 def _who_from_news_sentence(sent_span: Span) -> str:
-    # Prefer PERSON/ORG/NORP entities in the sentence span
-    for ent in sent_span.ents:
-        if ent.label_ in {"PERSON", "ORG", "NORP"}:
-            return ent.text
-    return "user"
+    return identify_who_aspect(sent_span)
 
 
-def _who_from_review_sentence(_: Span) -> str:
-    # Reviews typically represent end users
-    return "user"
+def _who_from_review_sentence(sent_span: Span) -> str:
+    return identify_who_aspect(sent_span)
 
 
 def _who_from_tweet_sentence(sent_span: Span, raw_text: str) -> str:
@@ -66,20 +54,23 @@ def _who_from_tweet_sentence(sent_span: Span, raw_text: str) -> str:
     m = re.search(r"(?<!\w)@(\w+)", raw_text)
     if m:
         return f"@{m.group(1)}"
-    if any(t.lower_ in {"i", "we"} for t in sent_span):
-        return "user"
-    return "user"
+    # Otherwise use WordNet-based identification
+    return identify_who_aspect(sent_span)
 
 
 # ---------------- WHAT extraction ----------------
-def _spacy_match_what(doc: Doc) -> List[Tuple[Span, Span]]:
-    """Return list of (what_span, sentence_span) by POS patterns."""
-    matched: List[Tuple[Span, Span]] = []
-    for _, start, end in matcher(doc):
-        span = doc[start:end]
-        sent = span.sent if span.sent is not None else span
-        matched.append((span, sent))
-    return matched
+def _extract_what_from_sentence(
+    sent_text: str, min_similarity: float = 0.5
+) -> Optional[str]:
+    """
+    Extract WHAT aspect using the new aspect_identifier.
+    Returns the best matching what clause or None.
+    """
+    what_candidates = identify_what_aspect(sent_text, min_similarity)
+    if what_candidates:
+        # Return the first (highest priority) candidate
+        return what_candidates[0]["text"]
+    return None
 
 
 # ---------------- software context filter ----------------
@@ -100,50 +91,56 @@ def _filter_by_software_context(
     return kept
 
 
-# ---------------- per-source extractors (NO cleaning) ----------------
-def _extract_from_review(content: str) -> List[Dict]:
+# ---------------- per-source extractors ----------------
+def _extract_from_review(content: str, min_similarity: float = 0.5) -> List[Dict]:
     doc = nlp(content)  # content already cleaned upstream
     cands: List[Dict] = []
-    for what_span, sent in _spacy_match_what(doc):
-        cands.append(
-            {
-                "who": _who_from_review_sentence(sent),
-                "what": what_span.text.strip(),
-                "why": _extract_why(sent.text),
-                "full_sentence": sent.text.strip(),
-            }
-        )
+    for sent in doc.sents:
+        what = _extract_what_from_sentence(sent.text, min_similarity)
+        if what:  # Only create candidate if we found a WHAT
+            cands.append(
+                {
+                    "who": _who_from_review_sentence(sent),
+                    "what": what,
+                    "why": _extract_why(sent.text),
+                    "full_sentence": sent.text.strip(),
+                }
+            )
     return cands
 
 
-def _extract_from_news(content: str) -> List[Dict]:
+def _extract_from_news(content: str, min_similarity: float = 0.5) -> List[Dict]:
     doc = nlp(content)  # content already cleaned upstream
     cands: List[Dict] = []
-    for what_span, sent in _spacy_match_what(doc):
-        cands.append(
-            {
-                "who": _who_from_news_sentence(sent),
-                "what": what_span.text.strip(),
-                "why": _extract_why(sent.text),
-                "full_sentence": sent.text.strip(),
-            }
-        )
+    for sent in doc.sents:
+        what = _extract_what_from_sentence(sent.text, min_similarity)
+        if what:  # Only create candidate if we found a WHAT
+            cands.append(
+                {
+                    "who": _who_from_news_sentence(sent),
+                    "what": what,
+                    "why": _extract_why(sent.text),
+                    "full_sentence": sent.text.strip(),
+                }
+            )
     return cands
 
 
-def _extract_from_tweet(content: str) -> List[Dict]:
-    raw = content  # keep raw to find @mentions; no cleaning here
+def _extract_from_tweet(content: str, min_similarity: float = 0.5) -> List[Dict]:
+    raw = content  # keep raw to find @mentions
     doc = nlp(content)
     cands: List[Dict] = []
-    for what_span, sent in _spacy_match_what(doc):
-        cands.append(
-            {
-                "who": _who_from_tweet_sentence(sent, raw),
-                "what": what_span.text.strip(),
-                "why": _extract_why(sent.text),
-                "full_sentence": sent.text.strip(),
-            }
-        )
+    for sent in doc.sents:
+        what = _extract_what_from_sentence(sent.text, min_similarity)
+        if what:  # Only create candidate if we found a WHAT
+            cands.append(
+                {
+                    "who": _who_from_tweet_sentence(sent, raw),
+                    "what": what,
+                    "why": _extract_why(sent.text),
+                    "full_sentence": sent.text.strip(),
+                }
+            )
     return cands
 
 
@@ -170,11 +167,11 @@ def extract_user_stories(
 
     # 1) Extract candidates
     if source == "review":
-        candidates = _extract_from_review(content)
+        candidates = _extract_from_review(content, min_similarity)
     elif source == "news":
-        candidates = _extract_from_news(content)
+        candidates = _extract_from_news(content, min_similarity)
     elif source == "tweet":
-        candidates = _extract_from_tweet(content)
+        candidates = _extract_from_tweet(content, min_similarity)
     else:
         raise ValueError("source must be one of: 'review' | 'news' | 'tweet'")
 

@@ -139,14 +139,14 @@ def _render_puml_chunks(
         # Declare actors
         for a in actors_in_chunk:
             alias = actor_alias[a]
-            # Quote the label to keep spaces/case
+            # Use proper PlantUML syntax: actor "label" as alias
             lines.append(f'actor "{a}" as {alias}')
 
         # Declare use cases + optional notes (merge of whys/sentences)
         for uc_key in ckeys:
             alias = uc_alias[uc_key]
             label = usecase_map[uc_key]["label"]
-            lines.append(f"({label}) as {alias}")
+            lines.append(f'usecase "{label}" as {alias}')
 
         # Edges
         for actor_label, uc_key in chunk_edges:
