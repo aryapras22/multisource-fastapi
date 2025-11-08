@@ -1,82 +1,42 @@
 # user_story_extractor.py
 from __future__ import annotations
-from typing import List, Dict, Optional, Literal, Iterable, Tuple
+from typing import List, Dict, Optional, Literal, Iterable
 import re
 import uuid
-from bson import ObjectId
 
 import spacy
 from spacy.tokens import Doc, Span
 
 from dictionaries.default_dict import software_functionality_dict
-from models import UserStoryModel, PyObjectId
+from models import UserStoryModel
 from db import user_stories_collection
+
+# Import aspect identification functions
 from services.aspect_identifier import (
     identify_who_aspect,
     identify_what_aspect,
     identify_why_aspect,
+    nlp,  # Reuse the same spaCy model
 )
 
 import nltk
 
-nltk.download("wordnet")
-nltk.download("omw-1.4")
-
-# ---------------- spaCy setup ----------------
-nlp = spacy.load("en_core_web_lg")
-
-# Note: Matcher no longer used as WHAT extraction is handled by aspect_identifier
+nltk.download("wordnet", quiet=True)
+nltk.download("omw-1.4", quiet=True)
+nltk.download("stopwords", quiet=True)
 
 
-# ---------------- WHY extraction ----------------
-def _extract_why(sentence_text: str) -> Optional[str]:
-    """
-    Extract WHY aspect using the new aspect_identifier.
-    Returns the first (shortest) why clause or None.
-    """
-    why_candidates = identify_why_aspect(sentence_text)
-    if why_candidates:
-        return why_candidates[0]  # Return the shortest/first candidate
-    return None
+# ---------------- Utility functions ----------------
+def norm_space(s: str) -> str:
+    """Normalize whitespace in a string."""
+    return re.sub(r"\s+", " ", (s or "").strip())
 
 
-# ---------------- WHO extraction (source-specific) ----------------
-def _who_from_news_sentence(sent_span: Span) -> str:
-    return identify_who_aspect(sent_span)
-
-
-def _who_from_review_sentence(sent_span: Span) -> str:
-    return identify_who_aspect(sent_span)
-
-
-def _who_from_tweet_sentence(sent_span: Span, raw_text: str) -> str:
-    # If tweet mentions someone, use the first @mention as who; else default
-    m = re.search(r"(?<!\w)@(\w+)", raw_text)
-    if m:
-        return f"@{m.group(1)}"
-    # Otherwise use WordNet-based identification
-    return identify_who_aspect(sent_span)
-
-
-# ---------------- WHAT extraction ----------------
-def _extract_what_from_sentence(
-    sent_text: str, min_similarity: float = 0.5
-) -> Optional[str]:
-    """
-    Extract WHAT aspect using the new aspect_identifier.
-    Returns the best matching what clause or None.
-    """
-    what_candidates = identify_what_aspect(sent_text, min_similarity)
-    if what_candidates:
-        # Return the first (highest priority) candidate
-        return what_candidates[0]["text"]
-    return None
-
-
-# ---------------- software context filter ----------------
+# ---------------- Software context filter ----------------
 def _filter_by_software_context(
     cands: List[Dict], keywords: Iterable[str], threshold: float
 ) -> List[Dict]:
+    """Filter candidates by similarity to software functionality keywords."""
     keyword_docs = [nlp(k) for k in keywords]
     kept = []
     for c in cands:
@@ -91,60 +51,94 @@ def _filter_by_software_context(
     return kept
 
 
-# ---------------- per-source extractors ----------------
+# ---------------- Per-source extractors ----------------
+def _extract_from_sentence(
+    sent_text: str, raw_text: str = "", source: str = "review"
+) -> Optional[Dict]:
+    """Extract user story from a single sentence."""
+    doc = nlp(sent_text)
+
+    # Extract WHAT (required) - use aspect_identifier
+    what_candidates = identify_what_aspect(sent_text, min_similarity=0.5)
+    if not what_candidates:
+        return None
+
+    # Pick the first software-related candidate, or fallback to first general one
+    what = None
+    for candidate in what_candidates:
+        if candidate["kind"] == "software-related":
+            what = candidate["text"]
+            break
+    if not what and what_candidates:
+        what = what_candidates[0]["text"]
+
+    if not what:
+        return None
+
+    # Extract WHO - use aspect_identifier
+    # Convert Doc to Span for the full sentence
+    sent_span = doc[:]
+    who = identify_who_aspect(sent_span)
+
+    # For tweets, check for @mentions
+    if source == "tweet" and raw_text:
+        m = re.search(r"(?<!\w)@(\w+)", raw_text)
+        if m:
+            who = f"@{m.group(1)}"
+
+    # Extract WHY - use aspect_identifier
+    why_candidates = identify_why_aspect(sent_text)
+    why = why_candidates[0] if why_candidates else None
+
+    return {
+        "who": who,
+        "what": what,
+        "why": why,
+        "full_sentence": sent_text.strip(),
+    }
+
+
 def _extract_from_review(content: str, min_similarity: float = 0.5) -> List[Dict]:
-    doc = nlp(content)  # content already cleaned upstream
+    """Extract user stories from review content."""
+    doc = nlp(content)
     cands: List[Dict] = []
+
     for sent in doc.sents:
-        what = _extract_what_from_sentence(sent.text, min_similarity)
-        if what:  # Only create candidate if we found a WHAT
-            cands.append(
-                {
-                    "who": _who_from_review_sentence(sent),
-                    "what": what,
-                    "why": _extract_why(sent.text),
-                    "full_sentence": sent.text.strip(),
-                }
-            )
+        result = _extract_from_sentence(sent.text, source="review")
+        if result:
+            cands.append(result)
+
     return cands
 
 
 def _extract_from_news(content: str, min_similarity: float = 0.5) -> List[Dict]:
-    doc = nlp(content)  # content already cleaned upstream
+    """Extract user stories from news content."""
+    doc = nlp(content)
     cands: List[Dict] = []
+
     for sent in doc.sents:
-        what = _extract_what_from_sentence(sent.text, min_similarity)
-        if what:  # Only create candidate if we found a WHAT
-            cands.append(
-                {
-                    "who": _who_from_news_sentence(sent),
-                    "what": what,
-                    "why": _extract_why(sent.text),
-                    "full_sentence": sent.text.strip(),
-                }
-            )
+        result = _extract_from_sentence(sent.text, source="news")
+        if result:
+            cands.append(result)
+
     return cands
 
 
 def _extract_from_tweet(content: str, min_similarity: float = 0.5) -> List[Dict]:
-    raw = content  # keep raw to find @mentions
+    """Extract user stories from tweet content."""
+    raw = content
     doc = nlp(content)
     cands: List[Dict] = []
+
     for sent in doc.sents:
-        what = _extract_what_from_sentence(sent.text, min_similarity)
-        if what:  # Only create candidate if we found a WHAT
-            cands.append(
-                {
-                    "who": _who_from_tweet_sentence(sent, raw),
-                    "what": what,
-                    "why": _extract_why(sent.text),
-                    "full_sentence": sent.text.strip(),
-                }
-            )
+        result = _extract_from_sentence(sent.text, raw_text=raw, source="tweet")
+        if result:
+            cands.append(result)
+
     return cands
 
 
-# ---------------- public API ----------------
+# ---------------- Public API ----------------
 def extract_user_stories(
     *,
     source: Literal["review", "news", "tweet"],
@@ -155,12 +149,18 @@ def extract_user_stories(
     dedupe: bool = True,
 ) -> List[UserStoryModel]:
     """
-    Input: ONE source content string (already cleaned upstream).
-    Output: list of UserStoryModel, also inserted into user_stories_collection.
+    Extract user stories from content using rule-based approach.
 
-    - Different extractor per source.
-    - Optional filtering by software functionality context (similarity).
-    - Optional de-duplication by (who, what, why, full_sentence).
+    Args:
+        source: Type of source ('review', 'news', or 'tweet')
+        source_id: ID of the source document
+        content: Text content to extract from
+        project_id: Project ID for organizing user stories
+        min_similarity: Minimum similarity threshold for software context filtering
+        dedupe: Whether to remove duplicate user stories
+
+    Returns:
+        List of UserStoryModel objects
     """
     if not content or not isinstance(content, str):
         return []
@@ -176,15 +176,15 @@ def extract_user_stories(
         raise ValueError("source must be one of: 'review' | 'news' | 'tweet'")
 
     # 2) Filter by domain context
-    filtered = _filter_by_software_context(
-        candidates, software_functionality_dict, min_similarity
-    )
+    # filtered = _filter_by_software_context(
+    #     candidates, software_functionality_dict, min_similarity
+    # )
 
     # 3) De-duplicate (stable order)
     if dedupe:
         seen = set()
         uniq = []
-        for c in filtered:
+        for c in candidates:
             key = (
                 c["who"].lower(),
                 c["what"].lower(),
@@ -198,6 +198,8 @@ def extract_user_stories(
 
     if not filtered:
         return []
+
+    # 4) Create UserStoryModel objects and insert into database
     docs = []
     models: List[UserStoryModel] = []
     for c in filtered:
@@ -208,10 +210,10 @@ def extract_user_stories(
             what=c["what"],
             why=c.get("why"),
             full_sentence=c["full_sentence"],
-            similarity_score=c["similarity"],
+            similarity_score=c.get("similarity", 0.0),
             source=source,
             source_id=source_id,
-            project_id=project_id,  # added
+            project_id=project_id,
         )
         models.append(m)
         docs.append(
@@ -224,9 +226,11 @@ def extract_user_stories(
                 "similarity_score": m.similarity_score,
                 "source": m.source,
                 "source_id": m.source_id,
-                "project_id": m.project_id,  # added
+                "project_id": m.project_id,
             }
         )
+
     if docs:
         user_stories_collection.insert_many(docs)
+
     return models
