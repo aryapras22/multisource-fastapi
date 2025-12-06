@@ -32,52 +32,25 @@ def norm_space(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").strip())
 
 
-# ---------------- Software context filter ----------------
-def _filter_by_software_context(
-    cands: List[Dict], keywords: Iterable[str], threshold: float
-) -> List[Dict]:
-    """Filter candidates by similarity to software functionality keywords."""
-    keyword_docs = [nlp(k) for k in keywords]
-    kept = []
-    for c in cands:
-        what_doc = nlp(c["what"])
-        max_sim = 0.0
-        for kd in keyword_docs:
-            sim = what_doc.similarity(kd)
-            if sim > max_sim:
-                max_sim = sim
-        if max_sim >= threshold:
-            kept.append({**c, "similarity": float(max_sim)})
-    return kept
-
-
 # ---------------- Per-source extractors ----------------
 def _extract_from_sentence(
     sent_text: str, raw_text: str = "", source: str = "review"
 ) -> Optional[Dict]:
     """Extract user story from a single sentence."""
     doc = nlp(sent_text)
+    sent_span = doc[:]
 
     # Extract WHAT (required) - use aspect_identifier
-    what_candidates = identify_what_aspect(sent_text, min_similarity=0.5)
+    what_candidates = identify_what_aspect(sent_span)
     if not what_candidates:
         return None
 
-    # Pick the first software-related candidate, or fallback to first general one
-    what = None
-    for candidate in what_candidates:
-        if candidate["kind"] == "software-related":
-            what = candidate["text"]
-            break
-    if not what and what_candidates:
-        what = what_candidates[0]["text"]
-
+    # Pick the first candidate
+    what = what_candidates[0]["text"] if what_candidates else None
     if not what:
         return None
 
     # Extract WHO - use aspect_identifier
-    # Convert Doc to Span for the full sentence
-    sent_span = doc[:]
     who = identify_who_aspect(sent_span)
 
     # For tweets, check for @mentions
@@ -86,8 +59,8 @@ def _extract_from_sentence(
         if m:
             who = f"@{m.group(1)}"
 
-    # Extract WHY - use aspect_identifier
-    why_candidates = identify_why_aspect(sent_text)
+    # Extract WHY - use aspect_identifier (requires what_candidates)
+    why_candidates = identify_why_aspect(sent_span, what_candidates)
     why = why_candidates[0] if why_candidates else None
 
     return {

@@ -11,10 +11,31 @@ import spacy
 from spacy.tokens import Span, Token, Doc
 from nltk.corpus import wordnet as wn
 
-from dictionaries.default_dict import software_functionality_dict
-
 # ---------------- spaCy setup ----------------
 nlp = spacy.load("en_core_web_lg")
+
+# Constants
+WN_ALLOWED_LEXNAMES_NOUNS = {"noun.person", "noun.group", "noun.artifact"}
+WN_ALLOWED_LEXNAMES_VERBS = {
+    "verb.cognition",
+    "verb.communication",
+    "verb.contact",
+    "verb.creation",
+    "verb.motion",
+    "verb.perception",
+    "verb.possession",
+}
+
+
+# ---------------- Utility Functions ----------------
+def norm_space(s: str) -> str:
+    """Normalize whitespace in string."""
+    return re.sub(r"\s+", " ", (s or "").strip())
+
+
+def clean_to_prefix(s: str) -> str:
+    """Remove 'to' prefix and normalize spacing."""
+    return norm_space(re.sub(r"^(to\s+)", "", s.strip(" .,:;!-"), flags=re.I))
 
 
 # ---------------- WHO Aspect Identification ----------------
@@ -42,8 +63,13 @@ def identify_who_aspect(sent_span: Span) -> str:
 
     # Step 2: Check each token against criteria
     for token in subject_object_tokens:
-        # Check if token is a person/org entity
-        is_person_entity = token.ent_type_ in {"PERSON", "ORG", "NORP"}
+        # Check if token is part of a person/org entity
+        is_person_entity = False
+        for ent in sent_span.doc.ents:
+            if token.i >= ent.start and token.i < ent.end:
+                if ent.label_ in {"PERSON", "ORG"}:
+                    is_person_entity = True
+                    break
 
         # Check if token is a pronoun
         is_a_pronoun = token.pos_ == "PRON"
@@ -52,7 +78,7 @@ def identify_who_aspect(sent_span: Span) -> str:
         is_who_category = False
         token_synsets = wn.synsets(token.text.lower())
         for synset in token_synsets:
-            lexname = synset.lexname()  # type: ignore
+            lexname = synset.lexname()
             if lexname and lexname in target_lexnames:
                 is_who_category = True
                 break
@@ -68,190 +94,144 @@ def identify_who_aspect(sent_span: Span) -> str:
 
 
 # ---------------- WHAT Aspect Identification ----------------
-def _check_if_phrase_is_software_related(
-    phrase: str, min_similarity: float = 0.5
-) -> bool:
+def identify_what_aspect(sent_span: Span) -> List[Dict]:
     """
-    Check if a phrase is related to software functionality using semantic similarity.
+    Identify WHAT aspect using POS chunking patterns and WordNet verb lexnames.
 
     Args:
-        phrase: The text phrase to check
-        min_similarity: Minimum similarity threshold
+        sent_span: A spaCy Span representing a sentence
 
     Returns:
-        True if phrase is software-related, False otherwise
+        List of candidates with text, strategy, and kind fields
     """
-    phrase_doc = nlp(phrase)
-    keyword_docs = [nlp(k) for k in software_functionality_dict]
-
-    max_sim = 0.0
-    for kd in keyword_docs:
-        sim = phrase_doc.similarity(kd)
-        if sim > max_sim:
-            max_sim = sim
-
-    return max_sim >= min_similarity
-
-
-def _find_main_verb_phrase(doc: Doc) -> Optional[str]:
-    """
-    Find the main verb phrase in the document.
-
-    Args:
-        doc: A spaCy Doc
-
-    Returns:
-        The main verb phrase or None
-    """
-    for token in doc:
-        if token.pos_ == "VERB" and token.dep_ in {"ROOT", "relcl", "ccomp"}:
-            # Get the verb and its direct object/complement
-            phrase_tokens = [token]
-            for child in token.children:
-                if child.dep_ in {"dobj", "attr", "acomp", "prt", "advmod"}:
-                    phrase_tokens.append(child)
-
-            if len(phrase_tokens) > 1:
-                # Sort by token position
-                phrase_tokens.sort(key=lambda t: t.i)
-                return " ".join([t.text for t in phrase_tokens])
-            else:
-                return token.text
-    return None
-
-
-def _find_verb_noun_patterns(doc: Doc) -> List[str]:
-    """
-    Find simple Verb-Noun patterns in the document.
-
-    Args:
-        doc: A spaCy Doc
-
-    Returns:
-        List of verb-noun pattern strings
-    """
-    patterns = []
-
-    for token in doc:
-        if token.pos_ == "VERB":
-            for child in token.children:
-                if child.pos_ == "NOUN" and child.dep_ in {"dobj", "pobj", "attr"}:
-                    patterns.append(f"{token.text} {child.text}")
-
-    return patterns
-
-
-def identify_what_aspect(text: str, min_similarity: float = 0.5) -> List[Dict]:
-    """
-    Identify WHAT aspect using verb phrases and patterns.
-
-    Args:
-        text: The text to analyze
-        min_similarity: Minimum similarity threshold for software relevance
-
-    Returns:
-        List of candidates sorted by priority and length
-    """
-    doc = nlp(text)
     all_candidates: List[Dict] = []
+    toks = list(sent_span)
+    i = 0
 
-    # Find main verb phrase
-    action = _find_main_verb_phrase(doc)
-    if action:
-        all_candidates.append({"text": action, "priority": "general"})
+    # POS chunking: ADJ/VERB → PUNCT/PART/etc. → DET → NOUN/PROPN/ADV
+    while i < len(toks):
+        if toks[i].pos_ in {"ADJ", "VERB"}:
+            phrase_start = i
+            j = i
 
-    # Find Verb-Noun patterns
-    patterns = _find_verb_noun_patterns(doc)
-    for pattern in patterns:
-        all_candidates.append({"text": pattern, "priority": "pattern"})
+            # Collect ADJ/VERB tokens
+            while j < len(toks) and toks[j].pos_ in {"ADJ", "VERB"}:
+                j += 1
 
-    # Check software relevance and build final list
+            # Skip connecting tokens
+            while j < len(toks) and toks[j].pos_ in {
+                "PUNCT",
+                "PART",
+                "ADP",
+                "CCONJ",
+                "SCONJ",
+                "PRON",
+            }:
+                j += 1
+
+            # Skip determiners
+            while j < len(toks) and toks[j].pos_ == "DET":
+                j += 1
+
+            # Collect noun phrase
+            noun_start = j
+            while j < len(toks) and toks[j].pos_ in {"NOUN", "PROPN", "ADV"}:
+                j += 1
+
+            # If we found nouns after verbs/adjectives, create candidate
+            if j > noun_start:
+                span = clean_to_prefix(sent_span.doc[phrase_start:j].text)
+                all_candidates.append(
+                    {"text": span, "strategy": "pos_chunking", "kind": ""}
+                )
+                i = j
+            else:
+                i += 1
+        else:
+            i += 1
+
+    # Filter candidates by WordNet verb lexnames
     final_list: List[Dict] = []
     for candidate in all_candidates:
-        is_relevant = _check_if_phrase_is_software_related(
-            candidate["text"], min_similarity
-        )
-        kind = "software-related" if is_relevant else "general"
+        candidate_doc = nlp(candidate["text"])
+        has_valid_verb = False
 
-        final_list.append(
-            {"text": candidate["text"], "priority": candidate["priority"], "kind": kind}
-        )
+        for token in candidate_doc:
+            if token.pos_ == "VERB":
+                verb_synsets = wn.synsets(token.lemma_, pos=wn.VERB)
 
-    # Sort by priority (pattern > general) and then by descending text length
-    priority_order = {"pattern": 0, "general": 1}
-    final_list.sort(
-        key=lambda x: (priority_order.get(x["priority"], 2), -len(x["text"]))
-    )
+                for synset in verb_synsets:
+                    if synset is None:
+                        continue
+                    lexname = synset.lexname()
+
+                    if lexname in WN_ALLOWED_LEXNAMES_VERBS:
+                        has_valid_verb = True
+                        break
+
+                if has_valid_verb:
+                    break
+
+        if has_valid_verb:
+            final_list.append(candidate)
+
+    # Sort by descending text length
+    final_list.sort(key=lambda h: -len(h["text"]))
 
     # Remove duplicates while preserving order
-    seen = set()
-    unique_results = []
-    for item in final_list:
-        text_lower = item["text"].lower()
-        if text_lower not in seen:
-            seen.add(text_lower)
-            unique_results.append(item)
+    unique_results: Dict[str, Dict] = {}
+    for hit in final_list:
+        key = hit["text"].lower()
+        if key not in unique_results:
+            unique_results[key] = hit
 
-    return unique_results
+    return list(unique_results.values())
 
 
 # ---------------- WHY Aspect Identification ----------------
-def _clean_up_text(text: str) -> str:
+def identify_why_aspect(sent_span: Span, what_hits: List[Dict]) -> List[str]:
     """
-    Clean up text by removing extra whitespace and punctuation.
+    Identify WHY aspect based on causal relationships with WHAT aspects.
 
     Args:
-        text: The text to clean
+        sent_span: A spaCy Span representing a sentence
+        what_hits: List of WHAT aspect candidates
 
     Returns:
-        Cleaned text
+        List of unique purpose clauses
     """
-    # Remove extra whitespace
-    text = re.sub(r"\s+", " ", text).strip()
-    # Remove leading/trailing punctuation
-    text = text.strip(".,;:!?")
-    return text
+    hits: List[str] = []
+    what_texts = {hit["text"].lower() for hit in what_hits}
 
+    for token in sent_span:
+        # Check dependency
+        if token.dep_ not in {"advcl", "xcomp", "ccomp"}:
+            continue
 
-def identify_why_aspect(text: str) -> List[str]:
-    """
-    Identify WHY aspect using dependency parsing for purpose clauses.
+        # Check POS
+        if token.pos_ not in {"VERB", "ADJ", "NOUN"}:
+            continue
 
-    Args:
-        text: The text to analyze
+        # Extract subtree text
+        span = clean_to_prefix(" ".join(w.text for w in token.subtree))
 
-    Returns:
-        List of unique purpose clauses sorted by length (shorter first)
-    """
-    doc = nlp(text)
-    candidates: List[str] = []
+        # Check minimum word count
+        if len(span.split()) < 2:
+            continue
 
-    target_dependencies = {"advcl", "xcomp", "ccomp"}
+        # Check if WHY clause includes WHAT text (causal relationship)
+        span_lower = span.lower()
+        includes_what = any(what_text in span_lower for what_text in what_texts)
 
-    for token in doc:
-        if token.dep_ in target_dependencies:
-            # Get the full text of the token's subtree
-            purpose_clause = " ".join([t.text for t in token.subtree])
+        if includes_what:
+            hits.append(span)
+            break
 
-            # Clean up the clause
-            cleaned_clause = _clean_up_text(purpose_clause)
+    # Remove duplicates while preserving order (shortest first)
+    uniq: Dict[str, str] = {}
+    for h in sorted(hits, key=lambda h: len(h)):
+        key = h.lower()
+        if key not in uniq:
+            uniq[key] = h
 
-            # Check if cleaned clause has 2 or more words
-            if len(cleaned_clause.split()) >= 2:
-                candidates.append(cleaned_clause)
-                # Stop searching after first match (as per pseudocode)
-                break
-
-    # Sort by text length (shorter is better)
-    candidates.sort(key=len)
-
-    # Remove duplicates while preserving order
-    seen = set()
-    unique_results = []
-    for clause in candidates:
-        clause_lower = clause.lower()
-        if clause_lower not in seen:
-            seen.add(clause_lower)
-            unique_results.append(clause)
-
-    return unique_results
+    return list(uniq.values())
