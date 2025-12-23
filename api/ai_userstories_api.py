@@ -26,6 +26,35 @@ class AIUserStoryWithSourceOut(AIUserStoryDocOut):
 router = APIRouter(prefix="/ai", tags=["ai-userstories"])
 
 
+# Helper function to fetch source documents by ID
+def _fetch_many(coll, raw_ids: set[str]):
+    """Fetch multiple documents from a collection by their IDs.
+    
+    Args:
+        coll: MongoDB collection
+        raw_ids: Set of string IDs to fetch
+        
+    Returns:
+        Dictionary mapping string IDs to documents
+    """
+    if not raw_ids:
+        return {}
+    obj_ids = []
+    str_ids = []
+    for _id in raw_ids:
+        if ObjectId.is_valid(_id):
+            obj_ids.append(ObjectId(_id))
+        str_ids.append(_id)
+    # Try both ObjectId and string _id (in case some were stored as str)
+    q = {"$or": [{"_id": {"$in": obj_ids}}] if obj_ids else []}
+    q["$or"].append({"_id": {"$in": str_ids}})
+    docs = list(coll.find({"$or": q["$or"]}))
+    result = {}
+    for d in docs:
+        result[str(d["_id"])] = d
+    return result
+
+
 @router.post("/generate-user-stories", response_model=GenerateAIUserStoriesResponse)
 async def generate_ai_user_stories(payload: GenerateAIUserStoriesRequest):
     if payload.persist and not payload.project_id:
@@ -100,25 +129,6 @@ async def list_ai_user_stories(project_id: str):
         ctype = s.get("content_type")
         if ctype in ids_by_type and cid:
             ids_by_type[ctype].add(cid)
-
-    # Helper function to fetch source documents by ID
-    def _fetch_many(coll, raw_ids: set[str]):
-        if not raw_ids:
-            return {}
-        obj_ids = []
-        str_ids = []
-        for _id in raw_ids:
-            if ObjectId.is_valid(_id):
-                obj_ids.append(ObjectId(_id))
-            str_ids.append(_id)
-        # Try both ObjectId and string _id (in case some were stored as str)
-        q = {"$or": [{"_id": {"$in": obj_ids}}] if obj_ids else []}
-        q["$or"].append({"_id": {"$in": str_ids}})
-        docs = list(coll.find({"$or": q["$or"]}))
-        result = {}
-        for d in docs:
-            result[str(d["_id"])] = d
-        return result
 
     # Fetch source content data
     review_docs = _fetch_many(reviews_collection, ids_by_type["review"])

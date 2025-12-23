@@ -19,6 +19,23 @@ from services.user_story_extractor import extract_user_stories
 router = APIRouter()
 
 
+# Helper function to fetch multiple documents by ObjectId
+def _fetch_many(coll, obj_ids: set[ObjectId]):
+    """Fetch multiple documents from a collection by their ObjectIds.
+    
+    Args:
+        coll: MongoDB collection
+        obj_ids: Set of ObjectIds to fetch
+        
+    Returns:
+        Dictionary mapping string IDs to documents
+    """
+    if not obj_ids:
+        return {}
+    docs = list(coll.find({"_id": {"$in": list(obj_ids)}}))
+    return {str(d["_id"]): d for d in docs}
+
+
 @router.post("/extract-user-story", response_model=list[StoryOut])
 def extract_user_story(req: ExtractRequest):
     try:
@@ -79,12 +96,6 @@ def get_project_user_stories(project_id: str):
         stype = s.get("source")
         if stype in ids_by_type and sid and ObjectId.is_valid(sid):
             ids_by_type[stype].add(ObjectId(sid))
-
-    def _fetch_many(coll, obj_ids: set[ObjectId]):
-        if not obj_ids:
-            return {}
-        docs = list(coll.find({"_id": {"$in": list(obj_ids)}}))
-        return {str(d["_id"]): d for d in docs}
 
     review_docs = _fetch_many(reviews_collection, ids_by_type["review"])
     news_docs = _fetch_many(news_collection, ids_by_type["news"])

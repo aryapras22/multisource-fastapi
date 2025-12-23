@@ -8,6 +8,7 @@ from api.projects_api import router as projects_router
 from api.data_api import router as data_router
 from api.user_stories_api import router as user_stories_router
 from api.insight_generator_api import router as insight_generator
+from api.analytics_api import router as analytics_router
 
 app = FastAPI()
 
@@ -19,6 +20,7 @@ app.include_router(clustering_router)
 app.include_router(insight_generator, tags=["Insight Generator"])
 app.include_router(usecase_router, tags=["Usecase Generator"])
 app.include_router(ai_userstories_router, tags=["AI User Stories Generator"])
+app.include_router(analytics_router, tags=["Analytics"])
 
 
 origins = [settings.frontend_origin, "http://127.0.0.1:5173"]
