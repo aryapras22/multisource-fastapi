@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     insight_generator_webhook: str = Field(
         alias="INSIGHT_GENERATOR_WEBHOOK", default="NONE"
     )
+    api_key: str = Field(alias="API_KEY", default="")
     model_config = SettingsConfigDict(env_file=".env")
 
 
