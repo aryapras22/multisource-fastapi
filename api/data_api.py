@@ -17,8 +17,10 @@ from services.app_scrapper import (
     get_google_play_apps,
     get_google_play_reviews,
 )
-from services.news_scrapper import scrap_news
+from services.news_scraper_v2 import scrap_news as scrap_news_v2
+from services.news_scrapper_legacy import scrap_news_legacy
 from services.preprocessing import clean_news_content, clean_review, clean_tweet_text
+from config import settings
 from services.twitter_x_scrapper import scrap_twitter_x
 from bson import ObjectId
 
@@ -146,7 +148,15 @@ async def get_news(project_id: str, query: str, count: int = 10) -> list[NewsMod
             {"_id": project_id}, {"$set": {"fetchState.news": True}}
         )
         return existing_articles
-    news = await asyncio.to_thread(scrap_news, query, count=count)
+
+    # Choose scraper based on configuration
+    if settings.news_scraper_mode == "legacy":
+        print(f"[Data API] Using legacy news scraper for query: {query}")
+        news = await asyncio.to_thread(scrap_news_legacy, query, count=count)
+    else:  # Default to v2
+        print(f"[Data API] Using v2 news scraper (PyGoogleNews) for query: {query}")
+        news = await asyncio.to_thread(scrap_news_v2, query, count=count)
+
     articles = news.get("articles", []) if isinstance(news, dict) else news
     if not articles:
         return []
@@ -235,3 +245,36 @@ def clean_tweet(tweet_id: str) -> str:
     if not tweet:
         raise HTTPException(status_code=404, detail="Tweet not found")
     return clean_tweet_text(tweet["text"])
+
+
+@router.delete("/delete-news/{news_id}")
+def delete_news(news_id: str) -> dict:
+    try:
+        result = news_collection.delete_one({"_id": ObjectId(news_id)})
+        if result.deleted_count == 0:
+            raise HTTPException(status_code=404, detail="News article not found")
+        return {"message": "News article deleted successfully", "deleted_id": news_id}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/delete-review/{review_id}")
+def delete_review(review_id: str) -> dict:
+    try:
+        result = reviews_collection.delete_one({"_id": ObjectId(review_id)})
+        if result.deleted_count == 0:
+            raise HTTPException(status_code=404, detail="Review not found")
+        return {"message": "Review deleted successfully", "deleted_id": review_id}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/delete-tweet/{tweet_id}")
+def delete_tweet(tweet_id: str) -> dict:
+    try:
+        result = tweets_collection.delete_one({"_id": ObjectId(tweet_id)})
+        if result.deleted_count == 0:
+            raise HTTPException(status_code=404, detail="Tweet not found")
+        return {"message": "Tweet deleted successfully", "deleted_id": tweet_id}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))

@@ -15,3 +15,7 @@ app-store-web-scraper
 google-play-scraper
 typing-extensions
 pytest
+newspaper4k
+pygooglenews
+lxml_html_clean
+googlenewsdecoder
